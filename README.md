@@ -1,5 +1,5 @@
 
-![Example UI](example_uni.png)
+![Example UI](example_ui.png)
 An Example of the UI.
 
 This Branch is an adpation of the work below to add interactive visualisation for HJ-MAD on 1D functions.

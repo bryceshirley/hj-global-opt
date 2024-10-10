@@ -1,5 +1,8 @@
-This Branch is an adpation of the work below to add interactive visualisation for HJ-MAD on 1D functions
 
+![Example UI](example_uni.png)
+An Example of the UI.
+
+This Branch is an adpation of the work below to add interactive visualisation for HJ-MAD on 1D functions.
 # HJ Moreau Adaptive Descent
 
 ## Associated Publication

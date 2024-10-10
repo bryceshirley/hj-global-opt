@@ -4,7 +4,7 @@ import numpy as np
 # 1D functions
 # Sine function
 def Sin(x):
-    return torch.sin(5*x)
+    return torch.sin(x)
 
 def Sinc(x):
     return torch.where(x == 0, torch.tensor(1.0), torch.sin(x) / x)
@@ -15,7 +15,7 @@ def MultiMinimaFunc(x):
 
 # ----------------- Numpy Versions -----------------
 def Sin_numpy(x):
-    return np.sin(5*x)
+    return np.sin(x)
 
 def Sinc_numpy(x):
     return np.sinc(x / np.pi)  # np.sinc is normalized as sin(pi*x)/(pi*x)

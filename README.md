@@ -1,3 +1,5 @@
+This Branch is an adpation of the work below to add interactive visualisation for HJ-MAD on 1D functions
+
 # HJ Moreau Adaptive Descent
 
 ## Associated Publication

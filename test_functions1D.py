@@ -8,7 +8,7 @@ def Sin_numpy(x):
 def Sinc_numpy(x):
     """Compute the sinc function: sin(x)/(x) using numpy."""
     # Global minima at x=4.49341 and -4.49341, gamma = 2.75909 (restrict x0>0 for positive min)
-    return np.sin(x)/x
+    return np.sinc(x/np.pi)
 
 def MultiMinimaFunc_numpy(x):
     """Compute a multi-minima function: 5*sin(x) + 0.1*x^2."""

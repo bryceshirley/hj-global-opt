@@ -22,7 +22,7 @@ def MultiMinimaFunc_numpy(x):
         float or np.ndarray: The value of the function with added noise.
     """
     # Global minima at x=--1.51034569, gamma = 1.89777
-    return 5 * np.sin(x) + 0.1 * x**2
+    return 5 * np.sin(x+10) + 0.1 * (x+10)**2
 
 def MultiMinimaAbsFunc_numpy(x):
     """Compute a non-differentiable multi-minima function: 5*|sin(x)| + 0.1*x^2."""

@@ -148,3 +148,41 @@ def Ackley_numpy(x):
   f_val = -a * np.exp( -b * np.sqrt( quad_sum_term) ) - np.exp(cos_sum_term) + a + np.exp(1)
 
   return f_val
+
+# ----------------------------------------------------------------------
+# 1D Numpy and Torch Functions  python solvers
+# ----------------------------------------------------------------------
+
+def MultiMinimaFunc(x, noise_level=0.05):
+    """Compute a multi-minima function with optional noise: 5*sin(x) + 0.1*x^2 + noise."""
+    # Global minima at x=-1.51034569, gamma = 1.89777
+    base_function = 5 * torch.sin(x) + 0.1 * x**2
+    noise = torch.zeros_like(x)  # To include optional noise if needed
+    f_val = base_function + noise
+    return f_val
+
+def MultiMinimaAbsFunc(x):
+    """Compute a non-differentiable multi-minima function: 5*|sin(x)| + 0.1*x^2."""
+    # Global minima at (1,0.1), gamma = 1.43457
+    f_val = 5 * torch.abs(torch.sin(0.5 * x - 1)) + 0.1 * x**2
+    return f_val
+
+def MultiMinimaFunc_numpy(x, noise_level=0.05):
+    """Compute a multi-minima function with added noise: 5*sin(x) + 0.1*x^2 + noise.
+    
+    Args:
+        x (float or np.ndarray): Input value(s) for the function.
+        noise_level (float): The standard deviation of the noise to add. Default is 0.05.
+    
+    Returns:
+        float or np.ndarray: The value of the function with added noise.
+    """
+    # Global minima at x=--1.51034569, gamma = 1.89777
+    base_function = 5 * np.sin(x) + 0.1 * x**2
+    noise = 0 #np.random.normal(0, noise_level, size=x.shape if isinstance(x, np.ndarray) else 1)
+    return base_function + noise
+
+def MultiMinimaAbsFunc_numpy(x):
+    """Compute a non-differentiable multi-minima function: 5*|sin(x)| + 0.1*x^2."""
+    # Global minima at (1,0.1), gamma = 1.43457
+    return 5 * np.abs(np.sin(0.5*x-1)) + 0.1 * x**2

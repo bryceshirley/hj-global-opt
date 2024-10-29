@@ -22,7 +22,7 @@ def MultiMinimaFunc_numpy(x, noise_level=0.05):
     Returns:
         float or np.ndarray: The value of the function with added noise.
     """
-    # Global minima at x=-1.51035, gamma = 1.89777
+    # Global minima at x=--1.51034569, gamma = 1.89777
     base_function = 5 * np.sin(x) + 0.1 * x**2
     noise = 0 #np.random.normal(0, noise_level, size=x.shape if isinstance(x, np.ndarray) else 1)
     return base_function + noise

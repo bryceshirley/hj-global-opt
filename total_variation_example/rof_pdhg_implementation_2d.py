@@ -6,6 +6,7 @@ from proximal_maps import squared_l2_prox, l2ball_projection
 from skimage import data
 from skimage.color import rgb2gray
 import torch
+from hj_prox import HJ_prox
 
 # Set device
 device = 'cuda' if torch.cuda.is_available() else 'mps' if \
@@ -34,8 +35,11 @@ G = Finite_Difference_Gradient_2D()
 
 # Initialise PDHG proximal maps and step sizes
 step_sizes = [1/8, 1]
-data_fidelity = lambda argument, threshold: squared_l2_prox(argument, threshold/reg_param, data_tensor)
+#data_fidelity = lambda argument, threshold: squared_l2_prox(argument, threshold/reg_param, data_tensor)
+data_fidelity = lambda argument, threshold: HJ_prox(argument, t=threshold/reg_param)
+
 regularisation_term = lambda argument, threshold: l2ball_projection(argument, axis=1)
+
 
 # Initialise arguments
 initial_arguments = [torch.zeros_like(data_tensor, dtype=data_tensor.dtype, device=device), torch.zeros_like(G(data_tensor), dtype=data_tensor.dtype, device=device)]

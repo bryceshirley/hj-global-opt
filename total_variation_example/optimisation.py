@@ -1,4 +1,4 @@
-from support_functions import calculate_norm_difference
+from support_functions import calculate_norm_difference, isotropic_total_variation
 
 class Alternating_Optimisation():
     """

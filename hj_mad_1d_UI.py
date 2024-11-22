@@ -12,7 +12,8 @@ from ipywidgets import (HTML, Button, Checkbox, Dropdown, FloatSlider,
 
 from test_functions1D import (DiscontinuousFunc_numpy,
                               MultiMinimaAbsFunc_numpy, MultiMinimaFunc_numpy,
-                              Sin_numpy, Sinc_numpy)
+                              Sin_numpy, Sinc_numpy,Drop_Wave_1D)
+
 
 from hj_mad_1d_numpy import HJ_MAD_1D_NUMPY
 
@@ -105,7 +106,7 @@ class HJ_MAD_1D_UI:
         
         # Dropdown to select the function
         self.function_dropdown = Dropdown(
-            options=['Sinc', 'Sin', 'MultiMinima','MultiMinimaAbsFunc', 'DiscontinuousFunc'],
+            options=['Sinc', 'Sin', 'MultiMinima','MultiMinimaAbsFunc', 'DiscontinuousFunc','Drop_Wave_1D'],
             value='MultiMinima',
             description='Function:',
             tooltip='Select the mathematical function to optimize.'
@@ -330,7 +331,7 @@ class HJ_MAD_1D_UI:
             intervalx_a, intervalx_b = -20, 20
             self.hj_mad.plot_parameters = [intervalx_a, intervalx_b,self.plot_output]
             self.hj_mad.f = Sinc_numpy
-            self.hj_mad.x_true = 4.49336839, # and -4.49336839
+            self.hj_mad.x_true = 4.49336839 # and -4.49336839
 
             self.gamma = 0.1259
         elif change['new'] == 'Sin':
@@ -343,14 +344,20 @@ class HJ_MAD_1D_UI:
             intervalx_a, intervalx_b = -15, 15
             self.hj_mad.plot_parameters = [intervalx_a, intervalx_b,self.plot_output]
             self.hj_mad.f = MultiMinimaAbsFunc_numpy
-            self.hj_mad.x_true = 2
+            self.hj_mad.x_true = 2.0
             self.gamma = 1.43457
         elif change['new'] == 'DiscontinuousFunc':
             intervalx_a, intervalx_b = -15, 15
             self.hj_mad.plot_parameters = [intervalx_a, intervalx_b,self.plot_output]
             self.hj_mad.f = DiscontinuousFunc_numpy
-            self.hj_mad.x_true = 2
-            self.gamma = 7
+            self.hj_mad.x_true = 2.0
+            self.gamma = 7.0
+        elif change['new'] == 'Drop_Wave_1D':
+            intervalx_a, intervalx_b = -15, 15
+            self.hj_mad.plot_parameters = [intervalx_a, intervalx_b,self.plot_output]
+            self.hj_mad.f = Drop_Wave_1D
+            self.hj_mad.x_true = 0.0
+            self.gamma = 0.063755
         else:  # change['new'] == 'MultiMinimaFunc'
             intervalx_a, intervalx_b = -40, 25
             self.hj_mad.plot_parameters = [intervalx_a, intervalx_b,self.plot_output]

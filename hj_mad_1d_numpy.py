@@ -488,7 +488,9 @@ class HJ_MAD_1D_NUMPY:
         else:
             plt.ylim(1.2 * y_min, 1.2 * y_max)  # 20% more than the min if min is zero or negative
 
-        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=1)
+        #plt.legend(loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=1)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=1)
+        #plt.legend(loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=1)
         plt.grid(which='major', linestyle='-', linewidth='0.5')
         plt.minorticks_on()
         plt.gca().xaxis.set_minor_locator(plt.MultipleLocator(1))

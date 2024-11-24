@@ -100,9 +100,9 @@ class BaseLinearOperator(nn.Module, ABC):
         """
         if 'T' in self.__dict__:
             del self.__dict__['T']
-    
+
     @functools.cached_property
-    def T(self) -> 'BaseLinearOperator':  
+    def T(self) -> 'BaseLinearOperator':
         """
         Returns the transpose of the current operator.
 
@@ -113,7 +113,7 @@ class BaseLinearOperator(nn.Module, ABC):
         Returns:
             An instance of the transpose class of the current operator.
         """
-        transpose_cls = self.get_transpose_class()      
+        transpose_cls = self.get_transpose_class()
         return transpose_cls(*self._args, **self._kwargs)
 
 class Forward_Finite_Differences_1D(BaseLinearOperator):
@@ -141,7 +141,7 @@ class Forward_Finite_Differences_1D(BaseLinearOperator):
             Type[BaseLinearOperator]: The Backward_Finite_Differences_1D class.
         """
         return Backward_Finite_Differences_1D
-    
+
     def __init__(self, step_size=1):        
         super().__init__(step_size)
 

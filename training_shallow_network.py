@@ -8,7 +8,7 @@ import torch.optim as optim
 n_neurons = 50  # Number of neurons in the shallow network
 learning_rate = 0.01
 num_epochs = 1000
-batch_size = 500
+batch_size = 100
 
 # Generate data
 no_of_samples = 500

@@ -19,11 +19,11 @@ torch.manual_seed(seed)
 # def weighted_softmax(F, w):
 #     """
 #     Compute the weighted softmax:
-#         weights_i = ( exp(F_i - max(F_i))) / sum(exp(F_i - max(F_i)))
+#         weights_line_i = ( exp(F_i - max(F_i))) / sum(exp(F_i - max(F_i)))
     
 #     Parameters:
 #         z (torch.Tensor): Input tensor of shape (n,).
-#         a (torch.Tensor): Weights tensor of shape (n,). Must have the same shape as z.
+#         a (torch.Tensor): weights_line tensor of shape (n,). Must have the same shape as z.
 
 #     Returns:
 #         torch.Tensor: Weighted softmax output of shape (n,).
@@ -89,11 +89,15 @@ class HJ_MD_LS:
         self.n_features = x_true.shape[0] 
 
         if self.int_samples_line > 0 and self.line_integration_method == 'MC':
-          self.weights = torch.ones(int_samples_line, dtype=torch.double)
+          self.weights_line = torch.ones(int_samples_line, dtype=torch.double)
         if self.int_samples_line > 0 and self.line_integration_method == 'GH':
-          z_line, weights = roots_hermite(int_samples_line)
+          z_line, weights_line = roots_hermite(int_samples_line)
           self.z_line = torch.tensor(z_line, dtype=torch.double)
-          self.weights = torch.tensor(weights, dtype=torch.double)
+          self.weights_line = torch.tensor(weights_line, dtype=torch.double)
+
+        z, weights = roots_hermite(int_samples)
+        self.z = torch.tensor(z, dtype=torch.double)
+        self.weights = torch.tensor(weights, dtype=torch.double)
 
         #if self.verbose:
         self.print_parameters()
@@ -172,7 +176,7 @@ class HJ_MD_LS:
           exp_term = torch.exp(shifted_exponent)
 
           # Compute the Denominator Integral
-          w = self.weights*exp_term / np.dot(self.weights, exp_term)
+          w = self.weights_line*exp_term / np.dot(self.weights_line, exp_term)
 
           softmax_overflow = 1.0 - (w < np.inf).prod()
           if softmax_overflow and rescale_factor > 1e-15:
@@ -181,14 +185,14 @@ class HJ_MD_LS:
           else:
               break
 
-          # v_delta = torch.sum(self.weights * exp_term)
+          # v_delta = torch.sum(self.weights_line * exp_term)
 
           # # Compute Numerator Integral            
-          # numerator = torch.sum(self.weights * self.z_line * exp_term)
+          # numerator = torch.sum(self.weights_line * self.z_line * exp_term)
 
         # Compute Gradient in 1D
         # grad_uk_L = (sigma/t_rescaled)*(numerator / v_delta)
-        print(f"{iterations=}")
+
         grad_uk_L = (sigma/t_rescaled)*np.dot(w, self.z_line)
 
 
@@ -218,10 +222,9 @@ class HJ_MD_LS:
         delta = self.delta
 
         rescale_factor = self.rescale0
-        scale_minus = 0.9
-        scale_plus = 1.1
-        min_rescale=1e-10
-        max_rescale= self.max_rescale
+
+        min_rescale=1e-200
+
         iterations = 0
 
         # Reshape xk to ensure broadcasting
@@ -230,11 +233,11 @@ class HJ_MD_LS:
         # Reshape xk to ensure broadcasting
 # Ensure xk has the correct shape for broadcasting (int_samples, n_features)
         xk_squeezed = xk.squeeze(0)  # Remove unnecessary dimensions (if xk has shape [1, 1, n_features])
-        xk_expanded = xk_squeezed.expand(self.int_samples_line, self.n_features)  # Shape: (int_samples_line, n_features)
+        xk_expanded = xk_squeezed.expand(self.int_samples, self.n_features)  # Shape: (int_samples_line, n_features)
 
         # Reshape z_line to allow broadcasting, then expand
-        z_expanded = self.z_line.unsqueeze(1)  # Shape: (int_samples, 1)
-        z_expanded = z_expanded.expand(self.int_samples_line, self.n_features)  # Shape: (int_samples_line, n_features)
+        z_expanded = self.z.unsqueeze(1)  # Shape: (int_samples, 1)
+        z_expanded = z_expanded.expand(self.int_samples, self.n_features)  # Shape: (int_samples_line, n_features)
         while True:
             # Apply Rescaling to time
             t_rescaled = t/rescale_factor
@@ -249,10 +252,10 @@ class HJ_MD_LS:
             rescaled_exponent = -rescale_factor * f_values / delta
             exp_term = torch.exp(rescaled_exponent)
 
-            # print(f"{self.weights.shape=}")
+            # print(f"{self.weights_line.shape=}")
             # print(f"{exp_term.shape=}")
 
-            # Compute weights
+            # Compute weights_line
             denominator = torch.dot(self.weights, exp_term)  # Scalar
             w = torch.where(
                 denominator != 0,
@@ -264,23 +267,24 @@ class HJ_MD_LS:
             softmax_overflow = 1.0 - (w < np.inf).prod()
             #softmax_overflow = 1.0 - np.prod((w.cpu().numpy() < np.inf).astype(float))
 
-            if softmax_overflow:
+            #assert(rescale_factor < min_rescale)
+
+            if softmax_overflow and rescale_factor > min_rescale:
                 # Adjust rescale factor and increment iteration count
-                rescale_factor = max(scale_minus*rescale_factor, min_rescale)
+                rescale_factor = scale_minus*rescale_factor
                 iterations += 1
             else:
                 break
         
         # Increase intial rescale factor if it is too small to better utilize samples
-        if iterations == 0:
-            rescale_factor = min(scale_plus*rescale_factor, max_rescale)
+        # if iterations == 0:
+        #     rescale_factor = min(scale_plus*rescale_factor, max_rescale)
         
         self.rescale0 = rescale_factor
+        print(f"{iterations=}")
 
         prox_xk = torch.matmul(w.t(), y)
         prox_xk = prox_xk.view(-1,1).t()
-
-        print(f"{prox_xk=}")
 
         return prox_xk, rescale_factor
 
@@ -384,10 +388,11 @@ class HJ_MD_LS:
                     print(f'HJ-MAD converged to tolerence {self.tol:6.2e}')
                     print(f'iter = {k}, Error =  {opt_error:6.2e}')
                 break
-            if k > 0 and np.abs(torch.norm(xk_hist[k] - xk_hist[k-1])) < self.saturate_tol*torch.norm(xk_hist[k-1]): 
-                if self.verbose:
-                    print('HJ-MAD converged due to saturation')
-                    print(f'iter = {k}, Error =  {opt_error:6.2e}')
+            # if k > 0 and np.abs(torch.norm(xk_hist[k] - xk_hist[k-1])) < self.saturate_tol*torch.norm(xk_hist[k-1]): 
+            #     if self.verbose:
+            #         print('HJ-MAD converged due to saturation')
+            #         print(f'iter = {k}, Error =  {opt_error:6.2e}')
+            #     break
                 # self.t = min(2*self.t , self.t_max)
                 # rescale_factor = self._rescale0
                 # test_t = min(2*self.t , self.t_max)
@@ -403,9 +408,6 @@ class HJ_MD_LS:
             #         print('HJ-MAD begun to oscillate')
             #         print(f'iter = {k}, Error =  {opt_error:6.2e}')
             #     break
-            
-            print(f"Rescale Factor = {self.rescale0:6.2e}")
-            print(f"Time = {self.t:6.2e}, Max Time = {self.t_max:6.2e}")
 
 
         successful_ls_portion = successful_ls_count/(k+1)

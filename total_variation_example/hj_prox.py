@@ -23,6 +23,8 @@ import numpy as np
 import torch
 from operators import Finite_Difference_Gradient_2D
 
+from scipy.special import roots_hermite
+
 # Define the TV norm function
 def tv_norm(x):
     """
@@ -48,6 +50,16 @@ def tv_norm(x):
     tv_norm = torch.norm(result, p=1, dim=(1, 2, 3), keepdim=True) # shape (int_samples, 1)
     tv_norm = tv_norm.squeeze() # shape (int_samples)
     return tv_norm
+
+def h(tau, direction, xk,int_samples,dims):
+    
+
+    xk_expanded = xk.expand(int_samples, dims)
+    direction_expanded = direction.expand(int_samples, dims)
+
+    y = xk_expanded + tau * direction_expanded
+    
+    return tv_norm(y)
 
 def HJ_prox(x, f=tv_norm, t=1e-1, delta=1e-1, int_samples=100, alpha=1.0, linesearch_iters=0, device='cpu'):
     """ Estimate proximals from function value sampling via HJ-Prox Algorithm.
@@ -113,26 +125,54 @@ def HJ_prox(x, f=tv_norm, t=1e-1, delta=1e-1, int_samples=100, alpha=1.0, linese
     """
     assert x.shape[1] == 1
     assert x.shape[0] >= 1
-    
-    linesearch_iters +=1
-    standard_dev = np.sqrt(delta * t / alpha)
-    dim = x.shape[0]
-    
-    y = standard_dev * torch.randn(int_samples, dim, device=device) + x.permute(1,0) # y has shape (n_samples, dim)
-    z = -f(y)*(alpha/delta)     # shape =  n_samples
-    w = torch.softmax(z, dim=0) # shape = n_samples 
-    
-    softmax_overflow = 1.0 - (w < np.inf).prod()
-    if softmax_overflow:
-        alpha *= 0.5
-        return HJ_prox(x, t=t, f=f, delta=delta, int_samples=int_samples, alpha=alpha,
-                            linesearch_iters=linesearch_iters, device=device)
-    else:
-        prox_term = torch.matmul(w.t(), y) # w.t() is shape (1,n_samples), y is shape (n_samples, dim) so result is shape (1, dim)
-        prox_term = prox_term.view(-1,1) # shape = (dim, 1)
-    
-    prox_overflow = 1.0 - (prox_term < np.inf).prod()
-    assert not prox_overflow, "Prox Overflowed"
 
-    #envelope = f(prox_term.view(1,-1)) + (1/(2*t)) * torch.norm(prox_term - x.permute(1,0), p=2)**2    
-    return prox_term #, linesearch_iters#, envelope
+    dim = x.shape[0]
+
+    
+    z, weights = roots_hermite(int_samples)
+    z_line = torch.tensor(z_line, dtype=torch.double)
+    weights = torch.tensor(weights, dtype=torch.double)
+
+    # Reshape xk to ensure broadcasting
+# Ensure xk has the correct shape for broadcasting (int_samples, n_features)
+    xk_squeezed = x.squeeze(0)  # Remove unnecessary dimensions (if xk has shape [1, 1, n_features])
+    xk_expanded = xk_squeezed.expand(int_samples, dim)  # Shape: (int_samples_line, n_features)
+
+    # Reshape z_line to allow broadcasting, then expand
+    z_expanded = z.unsqueeze(1)  # Shape: (int_samples, 1)
+    z_expanded = z_expanded.expand(int_samples, dim)  # Shape: (int_samples_line, n_features)
+
+    
+    while True:
+        # Apply Rescaling to time
+        t_rescaled = t/rescale_factor
+
+        sigma = np.sqrt(2*delta*t_rescaled)
+
+        # Compute Perturbed Points
+        y = xk_expanded - (sigma * z_expanded)
+
+
+    
+    # linesearch_iters +=1
+    # standard_dev = np.sqrt(delta * t / alpha)
+    # dim = x.shape[0]
+    
+    # y = standard_dev * torch.randn(int_samples, dim, device=device) + x.permute(1,0) # y has shape (n_samples, dim)
+    # z = -f(y)*(alpha/delta)     # shape =  n_samples
+    # w = torch.softmax(z, dim=0) # shape = n_samples 
+    
+    # softmax_overflow = 1.0 - (w < np.inf).prod()
+    # if softmax_overflow:
+    #     alpha *= 0.5
+    #     return HJ_prox(x, t=t, f=f, delta=delta, int_samples=int_samples, alpha=alpha,
+    #                         linesearch_iters=linesearch_iters, device=device)
+    # else:
+    #     prox_term = torch.matmul(w.t(), y) # w.t() is shape (1,n_samples), y is shape (n_samples, dim) so result is shape (1, dim)
+    #     prox_term = prox_term.view(-1,1) # shape = (dim, 1)
+    
+    # prox_overflow = 1.0 - (prox_term < np.inf).prod()
+    # assert not prox_overflow, "Prox Overflowed"
+
+    # #envelope = f(prox_term.view(1,-1)) + (1/(2*t)) * torch.norm(prox_term - x.permute(1,0), p=2)**2    
+    # return prox_term #, linesearch_iters#, envelope

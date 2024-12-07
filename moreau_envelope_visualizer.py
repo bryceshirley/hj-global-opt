@@ -354,7 +354,9 @@ class HJMoreauAdaptiveDescentVisualizer:
             
             exp_term = np.exp(maxscaled_exponent)
             
-            w = weights*exp_term / np.dot(weights, exp_term)
+            # w = weights*exp_term / np.dot(weights, exp_term)
+            w = np.divide(weights * exp_term, np.dot(weights, exp_term),
+               out=np.full_like(weights, np.inf), where=np.dot(weights, exp_term) != 0)
         
             softmax_overflow = 1.0 - (w < np.inf).prod()
             if softmax_overflow:

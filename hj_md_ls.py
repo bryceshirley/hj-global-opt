@@ -64,8 +64,8 @@ class HJ_MD_LS:
           5) xk_error_hist            = error to true solution history 
           6) rel_grad_uk_norm_hist    = relative grad norm history of Moreau envelope
     '''
-    def __init__(self, f, f_numpy, f_name, x_true, delta=0.1, int_samples=1000,int_samples_line=150, t = 1e1, max_iters=5e4,
-                 tol=5e-2, verbose=True,rescale0=1e-1,max_rescale= 1,saturate_tol=1e-9, line_integration_method='MC'):
+    def __init__(self, f, f_numpy, f_name, x_true, delta=0.1, t = 1e1, int_samples=1000,int_samples_line=150, max_iters=5e4,
+                 tol=5e-2,rescale0=1e-1,saturate_tol=1e-9,verbose=True,plot=False):
       
         self.delta            = delta
         self.f                = f
@@ -79,22 +79,18 @@ class HJ_MD_LS:
         self.x_true           = x_true
         self.verbose          = verbose
         self.rescale0         = rescale0
-        self._rescale0         = rescale0
         self.saturate_tol     = saturate_tol
-        self.line_integration_method = line_integration_method
-        self.max_rescale      = max_rescale
+        self.plot             = plot
 
-        self.t_max = t*1e5
 
         self.n_features = x_true.shape[0] 
 
-        if self.int_samples_line > 0 and self.line_integration_method == 'MC':
-          self.weights_line = torch.ones(int_samples_line, dtype=torch.double)
-        if self.int_samples_line > 0 and self.line_integration_method == 'GH':
-          z_line, weights_line = roots_hermite(int_samples_line)
-          self.z_line = torch.tensor(z_line, dtype=torch.double)
-          self.weights_line = torch.tensor(weights_line, dtype=torch.double)
-
+        # Generate Hermite Quadrature Points Along Line
+        z_line, weights_line = roots_hermite(int_samples_line)
+        self.z_line = torch.tensor(z_line, dtype=torch.double)
+        self.weights_line = torch.tensor(weights_line, dtype=torch.double)
+        
+        # Generate Hermite Quadrature Points in R^n #TODO: Remove mask like in paper
         z, weights = roots_hermite(int_samples)
         self.z = torch.tensor(z, dtype=torch.double)
         self.weights = torch.tensor(weights, dtype=torch.double)
@@ -108,22 +104,21 @@ class HJ_MD_LS:
             return f"{value:.3e}" if isinstance(value, (int, float)) else value
         
         parameters = [
-            ("delta", self.delta),
             ("f_name", self.f_name),
             ("Dimensions/Features", self.n_features),
+            ("delta", self.delta),
+            ("t", format_scientific(self.t)),
             ("int_samples", format_scientific(self.int_samples)),
             ("int_samples_line", format_scientific(self.int_samples_line)),
             ("max_iters", format_scientific(self.max_iters)),
             ("tol", self.tol),
-            ("t", format_scientific(self.t)),
             ("rescale0", format_scientific(self.rescale0)),
-            ("line_search", self.max_rescale),
             ("saturate_tol", format_scientific(self.saturate_tol)),
-            ("integration_method", self.line_integration_method),
         ]
         
         # Print the table
-        print(tabulate(parameters, headers=["Parameter", "Value"], tablefmt="pretty"))
+        if self.verbose:
+            print(tabulate(parameters, headers=["Parameter", "Value"], tablefmt="pretty"))
     
     def h(self, tau, constants):
        
@@ -136,17 +131,11 @@ class HJ_MD_LS:
        
         return self.f(y)
     
-    def improve_prox(self,xk, prox_xk, rescale_factor):
+    def improve_prox(self,xk, prox_xk, rescale_factor=1,delta=1e-5, t=100):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
             Corresponding to the Proximal Operator.
         '''
-        # print(f"{rescale_factor=:6.2e}")
-        rescale_factor = 1 # self.rescale0
-        delta         = 0.00001
-        t = 100
-
-
         # Direction of line 1D.
         direction = (xk - prox_xk)/torch.norm(xk - prox_xk)
         tau_xk = 0#-torch.norm(xk - prox_xk)
@@ -176,22 +165,22 @@ class HJ_MD_LS:
           exp_term = torch.exp(shifted_exponent)
 
           # Compute the Denominator Integral
-          w = self.weights_line*exp_term / np.dot(self.weights_line, exp_term)
+          # Compute weights_line
+          denominator = torch.dot(self.weights_line, exp_term)  # Scalar
+          w = torch.where(
+            denominator != 0,
+            self.weights_line * exp_term / denominator,
+            np.inf,#torch.full_like(self.weights, float("inf")),
+          )
 
+          # Check for Overflow
           softmax_overflow = 1.0 - (w < np.inf).prod()
-          if softmax_overflow and rescale_factor > 1e-15:
+
+          if softmax_overflow and rescale_factor > 1e-200:
               rescale_factor /= 2
               iterations+=1
           else:
               break
-
-          # v_delta = torch.sum(self.weights_line * exp_term)
-
-          # # Compute Numerator Integral            
-          # numerator = torch.sum(self.weights_line * self.z_line * exp_term)
-
-        # Compute Gradient in 1D
-        # grad_uk_L = (sigma/t_rescaled)*(numerator / v_delta)
 
         grad_uk_L = (sigma/t_rescaled)*np.dot(w, self.z_line)
 
@@ -201,8 +190,8 @@ class HJ_MD_LS:
 
         prox_xk_new = xk + prox_tau*direction
 
-        #self.plot_1d_prox(xk.view(1, self.n_features).numpy(), prox_xk.numpy(), prox_xk_new.numpy(), t_rescaled)
-
+        if self.plot:
+            self.plot_1d_prox(xk.view(1, self.n_features).numpy(), prox_xk.numpy(), prox_xk_new.numpy(), t_rescaled)
         
         return prox_xk_new
 
@@ -222,8 +211,6 @@ class HJ_MD_LS:
         delta = self.delta
 
         rescale_factor = self.rescale0
-
-        min_rescale=1e-200
 
         iterations = 0
 
@@ -260,18 +247,15 @@ class HJ_MD_LS:
             w = torch.where(
                 denominator != 0,
                 self.weights * exp_term / denominator,
-                torch.full_like(self.weights, float("inf")),
+                np.inf,#torch.full_like(self.weights, float("inf")),
             )
 
             # Check for Overflow
             softmax_overflow = 1.0 - (w < np.inf).prod()
-            #softmax_overflow = 1.0 - np.prod((w.cpu().numpy() < np.inf).astype(float))
 
-            #assert(rescale_factor < min_rescale)
-
-            if softmax_overflow and rescale_factor > min_rescale:
+            if softmax_overflow and rescale_factor > 1e-200:
                 # Adjust rescale factor and increment iteration count
-                rescale_factor = scale_minus*rescale_factor
+                rescale_factor /= 2
                 iterations += 1
             else:
                 break
@@ -287,28 +271,6 @@ class HJ_MD_LS:
         prox_xk = prox_xk.view(-1,1).t()
 
         return prox_xk, rescale_factor
-
-        # # Sample From a Guassian with mean x and standard deviation
-        # standard_dev = np.sqrt(delta*t/rescale_factor)
-
-        # z = torch.randn(self.int_samples,self.n_features)
-
-        # y = standard_dev * z + xk
-
-        # f_values = self.f(y)
-
-        # rescaled_exponent = -rescale_factor*f_values/delta
-        
-        # w = torch.softmax(rescaled_exponent, dim=0) # shape = n_samples 
-    
-        # softmax_overflow = 1.0 - (w < np.inf).prod()
-        # if softmax_overflow:
-        #   # Adjust rescale factor and increment iteration count
-        #   rescale_factor = max(scale_minus*rescale_factor, min_rescale)
-        #   iterations += 1
-        # else:
-        #   break
-
 
 
     
@@ -393,21 +355,6 @@ class HJ_MD_LS:
             #         print('HJ-MAD converged due to saturation')
             #         print(f'iter = {k}, Error =  {opt_error:6.2e}')
             #     break
-                # self.t = min(2*self.t , self.t_max)
-                # rescale_factor = self._rescale0
-                # test_t = min(2*self.t , self.t_max)
-                # prox_xk, rescale_factor = self.compute_directional_prox(xk,test_t)
-                # prox_xk_test = self.improve_prox(xk,prox_xk, rescale_factor)
-                # f_prox_test = self.f(prox_xk_test.view(1, self.n_features))
-                # if f_prox_test < f_prox:
-                #    t = min(2*self.t , self.t_max)
-                # else:
-                #    t = max(0.6*self.t , self.t_min)
-            # if k > 50 and torch.std(fk_hist[k-50:k+1]) < self.saturate_tol*fk_hist[k]:
-            #     if self.verbose:
-            #         print('HJ-MAD begun to oscillate')
-            #         print(f'iter = {k}, Error =  {opt_error:6.2e}')
-            #     break
 
 
         successful_ls_portion = successful_ls_count/(k+1)
@@ -446,14 +393,10 @@ class HJ_MD_LS:
             f_vals.append(self.f_numpy(xk_varied))
             h_vals.append(self.f_numpy(xk_varied) + 1/(2*tk)*np.linalg.norm(xk_varied-xk)**2)
 
-
-        # print(f"{self.delta} * {self.t_vec[0]} = {self.delta * self.t_vec[0]}")
-        # print(f'Std Dev: {std_dev}, Std Dev Minus: {std_dev_minus}, Std Dev Plus: {std_dev_plus}')
-
         plt.figure()
         plt.plot(tau_vals, f_vals, '-', color='black', label=f'f(x)')
         plt.plot(tau_vals, h_vals, '-', color='blue', label=r'$f(x) + \frac{1}{2t_0} ||x - x_0||^2$')
-        #plt.plot(tauk, self.f_numpy(xk[0,:]), '*', color='black', label=f'xk')
+        plt.plot(tauk, self.f_numpy(xk[0,:]), '*', color='black', label=f'xk')
         plt.plot(tau_old, self.f_numpy(prox_xk_old[0,:]), '*', color='green', label=f'Full Space')
         plt.plot(tau_new, self.f_numpy(prox_xk_new[0,:]), '*', color='red', label=f'On Line')
 

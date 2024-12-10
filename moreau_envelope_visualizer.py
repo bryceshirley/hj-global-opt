@@ -48,12 +48,15 @@ class HJMoreauAdaptiveDescentVisualizer:
         self.t_threshold_display = HTML()
         self.alpha_input = FloatText(value=0.1, description='Alpha:')
         self.momentum_input = FloatText(value=0.5, description='Momentum:')
+        self.spread_input = FloatText(value=1, description='Spread:')
 
 
         # Dropdowns
         self.function_dropdown = Dropdown(options=['MultiMinima', 'Sinc', 'Sin', 'MultiMinimaAbsFunc', 'DiscontinuousFunc'], value='MultiMinima', description='Function:')
-        self.integration_dropdown = Dropdown(options=["HJ_GH", "HJ_MC"], value="HJ_MC", description='Integration:')
+        self.integration_dropdown = Dropdown(options=["HJ_GH", "HJ_MC","softmax_prox_MC","argmin_prox_MC"], value="HJ_MC", description='Integration:')
+        self.distribution_dropdown = Dropdown(options=["Gaussian", "Laplace", "Cauchy"], value="Gaussian", description='Distribution:')
         self.integration_method = "HJ_MC"
+        self.distribution = "Gaussian"
 
 
         # Checkbox for fixed time and acceleration
@@ -62,12 +65,13 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         # Create buttons
         self.iterate_button = Button(description='Iterate and Plot', button_style='info')
-        self.run_100_iterations_button = Button(description='Run 100 Iterations', button_style='warning')
+        self.run_200_iterations_button = Button(description='Run 200 Iterations', button_style='warning')
         self.reset_button = Button(description='Reset', button_style='success')
 
         # Bind Events Drop Downs
         self.function_dropdown.observe(self.function_dropdown_update, names='value')
         self.integration_dropdown.observe(self.integration_dropdown_update, names='value')
+        self.distribution_dropdown.observe(self.distribution_dropdown_update, names='value')
 
         # Bind Events inputs
         self.x_0_input.observe(self.x_0_input_update, names='value')
@@ -77,11 +81,12 @@ class HJMoreauAdaptiveDescentVisualizer:
         self.rescale0_input.observe(self.rescale0_input_update, names='value')
         self.fixed_T_input.observe(self.fixed_T_input_update, names='value')
         self.int_samples_input.observe(self.int_samples_input_update, names='value')
+        self.spread_input.observe(self.spread_input_update, names='value')
 
         # Bind Events Buttons
         self.iterate_button.on_click(self.run_iteration)
         self.reset_button.on_click(self.reset)
-        self.run_100_iterations_button.on_click(self.run_100_iterations)
+        self.run_200_iterations_button.on_click(self.run_200_iterations)
 
         # Bind Events Checkbox
         self.display_samples_bool = False
@@ -111,14 +116,17 @@ class HJMoreauAdaptiveDescentVisualizer:
             HTML('<h2>HJ Moreau Adaptive Descent Visualizer</h2>'),
             note,
             HBox([self.function_dropdown,self.integration_dropdown]),
-            HBox([self.rescale0_input, self.scipy_moreau_envelope_checkbox, self.sample_bool_checkbox]),
+            HBox([self.scipy_moreau_envelope_checkbox, self.sample_bool_checkbox, self.rescale0_input]),
             HBox([self.x_0_input, self.alpha_input, self.momentum_input]),
             HBox([self.fixed_T_input,self.int_samples_input,self.delta_input]),
+            HBox([self.spread_input, self.distribution_dropdown]),
             self.t_threshold_display,  # Display for t_threshold
-            HBox([self.iterate_button, self.run_100_iterations_button, self.reset_button]),  # Added plot button to the layout
+            HBox([self.iterate_button, self.run_200_iterations_button, self.reset_button]),  # Added plot button to the layout
             self.plot_output,
             self.error_plot_output
         ]))
+        self.spread_input.layout.visibility = 'hidden'
+        self.distribution_dropdown.layout.visibility = 'hidden'
     
     # ~~~~~~~~ Controller Methods: Buttons ~~~~~~~~~~
 
@@ -126,10 +134,9 @@ class HJMoreauAdaptiveDescentVisualizer:
         self.initialize_history()
         self.update_plots()
 
-    def run_100_iterations(self, button):
-        """Run 100 iterations and update the plot."""
-        self.initialize_history()
-        for _ in range(100):
+    def run_200_iterations(self, button):
+        """Run 200 iterations and update the plot."""
+        for _ in range(30):
             self.update_x_k(button)  # Use the existing method to update x_k and history
         self.update_plots()  # Finally, update the plots after iterations
 
@@ -148,6 +155,28 @@ class HJMoreauAdaptiveDescentVisualizer:
 
     def integration_dropdown_update(self,change):
         self.integration_method = change['new']
+
+        if self.integration_method == "argmin_prox_MC":
+            self.delta_input.layout.visibility = 'hidden'
+            self.rescale0_input.layout.visibility = 'hidden'
+            self.spread_input.layout.visibility = 'visible'
+            self.distribution_dropdown.layout.visibility = 'visible'
+        elif self.integration_method == "softmax_prox_MC":
+            self.spread_input.layout.visibility = 'visible'
+            self.delta_input.layout.visibility = 'visible'
+            self.rescale0_input.layout.visibility = 'visible'
+            self.distribution_dropdown.layout.visibility = 'visible'
+        else:
+            self.delta_input.layout.visibility = 'visible'
+            self.spread_input.layout.visibility = 'hidden'
+            self.rescale0_input.layout.visibility = 'visible'
+            self.distribution_dropdown.layout.visibility = 'hidden'
+
+        self.initialize_history()
+        self.update_plots()
+
+    def distribution_dropdown_update(self,change):
+        self.distribution = change['new']
         self.initialize_history()
         self.update_plots()
 
@@ -237,6 +266,10 @@ class HJMoreauAdaptiveDescentVisualizer:
         self.initialize_history()
         self.update_plots()
 
+    def spread_input_update(self, _):
+        self.initialize_history()
+        self.update_plots()
+
     #~~~~~~~~ Display Updates ~~~~~~~~~~
 
     def update_t_threshold_display(self):
@@ -267,28 +300,134 @@ class HJMoreauAdaptiveDescentVisualizer:
 
     #~~~~~~~~ Algorithm Methods ~~~~~~~~~~
 
-    def scipy_compute_prox_and_grad(self, x_k):
+    def scipy_compute_prox_and_grad(self, x_k, t= None):
         """
         Compute the prox and gradient using Scipy's differential evolution method.
 
         """
-        fixed_T = self.fixed_T_input.value
+        if t is None:
+            t = self.fixed_T_input.value
+        int_samples = int(self.int_samples_input.value)
 
         # Find the global minimum using the differential evolution method
-        hk_parameters = (self.selected_function, fixed_T, x_k)
-        result = differential_evolution(h, [(self.intervalx_a, self.intervalx_b)], args=(hk_parameters,))
+        hk_parameters = (self.selected_function, t, x_k)
+        result = differential_evolution(h, [(self.intervalx_a, self.intervalx_b)], args=(hk_parameters,),popsize=int_samples)
 
         # Compute the correct gradient and prox
         prox_k = result.x[0]
-        grad_k = (x_k - prox_k) / fixed_T
+        grad_k = (x_k - prox_k) / t
 
         return prox_k, grad_k
+    
+    def argmin_prox_MC(self, x_k,t=None):
+        int_samples = int(self.int_samples_input.value)
+        if t is None:
+            t = self.fixed_T_input.value
+        spread = self.spread_input.value
 
-    def hj_compute_prox_and_grad_MC(self, x_k, delta=0.1, int_samples=1000):
+        if self.distribution == "Laplace":
+            #Laplace distribution scale parameter b, related to fixed_T
+            b = np.sqrt(t) / spread
+
+            # Generate Laplace-distributed samples with mean x_k and scale b
+            y = np.random.laplace(loc=x_k, scale=b, size=int_samples)
+
+        elif self.distribution == "Cauchy":
+            # Adjust this parameter for heavier tails if needed
+            gamma = np.sqrt(t)/spread
+
+            # Generate Cauchy-distributed samples with location x_k and scale gamma
+            y = x_k + gamma * np.random.standard_cauchy(size=int_samples)
+        else:
+            standard_dev = np.sqrt(t)/spread
+
+            # Generate Gaussian-distributed samples with mean x_k
+            y =  standard_dev * np.random.randn(int_samples) + x_k
+
+
+        h_parameters = (self.selected_function, t, x_k)
+
+        # Prox Function:
+        prox_function=h(y, h_parameters)
+
+        prox_index = np.argmin(prox_function)
+
+        prox_k = y[prox_index]
+
+        grad_k = (x_k - prox_k)
+
+        uk = prox_function[prox_index]
+
+        return prox_k, grad_k, uk, y
+    
+    def softmax_prox_MC(self, x_k,t=None):
         """
         Compute the prox and gradient using the Hamilton-Jacobi (HJ) method.
         """
-        fixed_T = self.fixed_T_input.value
+        if t is None:
+            t = self.fixed_T_input.value
+
+        delta = self.delta_input.value
+        rescale = self.rescale0_input.value
+        int_samples = int(self.int_samples_input.value)
+        spread = self.spread_input.value
+
+        line_search_iterations=0
+
+        while True:
+            
+            if self.distribution == "Laplace":
+                #Laplace distribution scale parameter b, related to fixed_T
+                b = np.sqrt(t/rescale)/spread
+
+                # Generate Laplace-distributed samples with mean x_k and scale b
+                y = np.random.laplace(loc=x_k, scale=b, size=int_samples)
+            elif self.distribution == "Cauchy":
+                # Adjust this parameter for heavier tails if needed
+                gamma = np.sqrt(t/rescale)/spread
+
+                # Generate Cauchy-distributed samples with location x_k and scale gamma
+                y = x_k + gamma * np.random.standard_cauchy(size=int_samples)
+            else:
+                standard_dev = np.sqrt(t/rescale)/spread
+
+                # Generate Gaussian-distributed samples with mean x_k and standard deviation
+                y =  standard_dev * np.random.randn(int_samples) + x_k
+
+            exponent = -rescale*self.selected_function(y) / delta
+            maxscaled_exponent = exponent - np.max(exponent)
+            
+            exp_term = np.exp(maxscaled_exponent)
+            
+            w = exp_term / np.sum(exp_term)
+        
+            softmax_overflow = 1.0 - (w < np.inf).prod()
+            if softmax_overflow:
+                rescale /= 2
+                line_search_iterations +=1
+            else:
+                break
+
+         # Compute Numerator and average over the samples
+        prox_k = np.dot(w, y)
+
+        # Compute Gradient at uk (times tk)
+        grad_k = (x_k - prox_k)
+
+        # Compute Moreau Envelope
+        #v_delta = np.mean(np.exp(exponent))
+        h_parameters = (self.selected_function, t, x_k)
+        uk = h(prox_k, h_parameters)
+
+        return prox_k, grad_k, uk, line_search_iterations, y
+
+    def hj_compute_prox_and_grad_MC(self, x_k,t=None):
+        """
+        Compute the prox and gradient using the Hamilton-Jacobi (HJ) method.
+        """
+        if t is None:
+            t = self.fixed_T_input.value
+
         delta = self.delta_input.value
         rescale = self.rescale0_input.value
         int_samples = int(self.int_samples_input.value)
@@ -297,7 +436,7 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         while True:
             # Sample From a Guassian with mean x and standard deviation
-            standard_dev = np.sqrt(delta * fixed_T/rescale)
+            standard_dev = np.sqrt(delta * t/rescale)
             y = standard_dev * np.random.randn(int_samples) + x_k
 
             exponent = -rescale*self.selected_function(y) / delta
@@ -322,16 +461,18 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         # Compute Moreau Envelope
         #v_delta = np.mean(np.exp(exponent))
-        h_parameters = (self.selected_function, fixed_T, x_k)
+        h_parameters = (self.selected_function, t, x_k)
         uk = h(prox_k, h_parameters)
 
         return prox_k, grad_k, uk, line_search_iterations, y
     
-    def hj_compute_prox_and_grad_GH(self, x_k, delta=0.1, int_samples=1000):
+    def hj_compute_prox_and_grad_GH(self, x_k,t=None):
         """
         Compute the prox and gradient using the Hamilton-Jacobi (HJ) method.
         """
-        fixed_T = self.fixed_T_input.value
+        if t is None:
+            t = self.fixed_T_input.value
+
         delta = self.delta_input.value
         rescale = self.rescale0_input.value
         int_samples = int(self.int_samples_input.value)
@@ -341,7 +482,7 @@ class HJMoreauAdaptiveDescentVisualizer:
         line_search_iterations=0
 
         while True:
-            t_rescaled = fixed_T/rescale
+            t_rescaled = t/rescale
             
             # Sample From a Guassian with mean x and standard deviation
             sigma = np.sqrt(2*delta*t_rescaled)
@@ -373,7 +514,7 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         # Compute Moreau Envelope
         #v_delta = np.mean(np.exp(exponent))
-        h_parameters = (self.selected_function, fixed_T, x_k)
+        h_parameters = (self.selected_function, t, x_k)
         uk = h(prox_k, h_parameters)
 
         return prox_k, grad_k, uk, line_search_iterations, y
@@ -401,11 +542,18 @@ class HJMoreauAdaptiveDescentVisualizer:
             prox_k, grad_k, _, _, _ = self.hj_compute_prox_and_grad_GH(x_k)
         elif method == "scipy":
             prox_k, grad_k = self.scipy_compute_prox_and_grad(x_k)
+        elif method == "softmax_prox_MC":
+            prox_k, grad_k, _, _, _ = self.softmax_prox_MC(x_k)
+        elif method == "argmin_prox_MC":
+            prox_k, grad_k, _, _ = self.argmin_prox_MC(x_k)
         else:
             raise ValueError(f"Unknown method {method}")
 
         # Perform gradient descent update
         x_k_plus_1 = x_k - alpha * (x_k-prox_k)
+
+        if self.selected_function(x_k_plus_1) > self.selected_function(x_k):
+            x_k_plus_1 = x_k
 
         return x_k_plus_1, grad_k
     
@@ -423,12 +571,16 @@ class HJMoreauAdaptiveDescentVisualizer:
         else:
             acc_x_k_plus_1, grad_k = self.gradient_descent(self.x_k, method=method)
 
+        if self.selected_function(acc_x_k_plus_1) > self.selected_function(self.x_k):
+            x_k_plus_1 = self.x_k
+
         return acc_x_k_plus_1, grad_k
     
     def initialize_history(self):
         # Initialize x_k for x_0
         self.k = 0
         self.x_k = self.x_0_input.value
+        self.x_k_scipy = self.x_0_input.value
         self.acc_x_k = self.x_0_input.value
         self.acc_x_k_minus_1 = self.x_0_input.value
 
@@ -437,17 +589,17 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         # Store the initial function value and initial errors
         self.acc_f_k_hist = [f_k]
-        self.acc_error_k_hist = [np.linalg.norm(self.x_k - self.global_min_x)]
+        self.acc_error_k_hist = [np.linalg.norm(self.acc_x_k- self.global_min_x)]
 
         self.f_k_hist = [f_k]
         self.error_k_hist = [np.linalg.norm(self.x_k - self.global_min_x)]
 
-        self.f_k_hist_HJ = [f_k]
-        self.error_k_hist_HJ = [np.linalg.norm(self.x_k - self.global_min_x)]
+        self.f_k_hist_scipy = [f_k]
+        self.error_k_hist_scipy = [np.linalg.norm(self.x_k_scipy- self.global_min_x)]
 
 
-        _, grad_k = self.gradient_descent(self.x_k)
-        self.gk_hist = [(self.x_k,grad_k)]
+        # _, grad_k = self.gradient_descent(self.x_k)
+        # self.gk_hist = [(self.x_k,grad_k)]
 
     def update_x_k(self, button):
         """
@@ -460,18 +612,19 @@ class HJMoreauAdaptiveDescentVisualizer:
         self.k += 1
 
         # Perform gradient descent for both methods
-        x_k_plus_1_HJ, _ = self.gradient_descent(self.x_k, method="scipy")
-        x_k_plus_1_scipy, grad_k_scipy = self.gradient_descent(self.x_k)
-
-        # Approximated Gradient
-        self.gk_hist.append((self.x_k, grad_k_scipy))
+        x_k_plus_1, grad_k = self.gradient_descent(self.x_k)
+        x_k_plus_1_scipy, _ = self.gradient_descent(self.x_k_scipy, method="scipy")
 
         # Update x_k for both methods
-        self.x_k = x_k_plus_1_scipy
-        self.x_k_HJ = x_k_plus_1_HJ
+        self.x_k_scipy= x_k_plus_1_scipy
+        self.x_k = x_k_plus_1
+
+        # # Approximated Gradient
+        # self.gk_hist.append((self.x_k, grad_k))
+
 
         # Perform accelerated gradient descent
-        acc_x_k_plus_1,grad_k = self.accelerated_gradient_descent(momentum)
+        acc_x_k_plus_1,_ = self.accelerated_gradient_descent(momentum)
 
         # Update accelerated x_k and x_k_minus
         self.acc_x_k_minus_1 = self.acc_x_k
@@ -484,14 +637,14 @@ class HJMoreauAdaptiveDescentVisualizer:
         self.acc_error_k_hist.append(np.linalg.norm(self.acc_x_k - self.global_min_x))
 
         # Calculate the function value and error for the original method
-        f_k_HJ = self.selected_function(self.x_k_HJ)
-        self.f_k_hist_HJ.append(f_k_HJ)
-        self.error_k_hist_HJ.append(np.linalg.norm(self.x_k_HJ - self.global_min_x))
-
-        # Calculate the function value and error for the original method
         f_k = self.selected_function(self.x_k)
         self.f_k_hist.append(f_k)
         self.error_k_hist.append(np.linalg.norm(self.x_k - self.global_min_x))
+
+        # Calculate the function value and error for the original method
+        f_k_scipy = self.selected_function(self.x_k_scipy)
+        self.f_k_hist_scipy.append(f_k_scipy)
+        self.error_k_hist_scipy.append(np.linalg.norm(self.x_k_scipy- self.global_min_x))
 
     def update_plots(self):
         function_plt=self.update_function_plot()
@@ -507,8 +660,9 @@ class HJMoreauAdaptiveDescentVisualizer:
         with self.plot_output:
             function_plt.show()
 
-    def update_moreau_envelope(self, method=None):
-        fixed_T = self.fixed_T_input.value
+    def update_moreau_envelope(self, method=None,t=None):
+        if t is None:
+            t = self.fixed_T_input.value
 
         if method is None:
             method = self.integration_method
@@ -520,26 +674,47 @@ class HJMoreauAdaptiveDescentVisualizer:
             avg_line_search_iterations = 0
 
             for xk in self.x_values:
-                _, _, uk, line_search_iterations, _ = self.hj_compute_prox_and_grad_MC(xk)
+                _, _, uk, line_search_iterations, _ = self.hj_compute_prox_and_grad_MC(xk,t=t)
                 avg_line_search_iterations += line_search_iterations
                 self.u_values.append(uk)
             avg_line_search_iterations /= len(self.x_values)
 
-            print(f"Avg Line Search Iterations: {avg_line_search_iterations}")
+            #print(f"Avg Line Search Iterations: {avg_line_search_iterations}")
         elif method == "HJ_GH":
             self.u_values = []
 
             avg_line_search_iterations = 0
 
             for xk in self.x_values:
-                _, _, uk, line_search_iterations, _ = self.hj_compute_prox_and_grad_GH(xk)
+                _, _, uk, line_search_iterations, _ = self.hj_compute_prox_and_grad_GH(xk,t=t)
                 avg_line_search_iterations += line_search_iterations
                 self.u_values.append(uk)
             avg_line_search_iterations /= len(self.x_values)
 
-            print(f"Avg Line Search Iterations: {avg_line_search_iterations}")
+            #print(f"Avg Line Search Iterations: {avg_line_search_iterations}")
+        elif method == "softmax_prox_MC":
+            self.u_values = []
+
+            avg_line_search_iterations = 0
+
+            for xk in self.x_values:
+                _, _, uk, line_search_iterations, _ = self.softmax_prox_MC(xk,t=t)
+                avg_line_search_iterations += line_search_iterations
+                self.u_values.append(uk)
+            avg_line_search_iterations /= len(self.x_values)
+
+            #print(f"Avg Line Search Iterations: {avg_line_search_iterations}")
+        elif method == "argmin_prox_MC":
+            self.u_values = []
+
+            avg_line_search_iterations = 0
+
+            for xk in self.x_values:
+                _, _, uk, _ = self.argmin_prox_MC(xk,t=t)
+                self.u_values.append(uk)
+
         elif method == "scipy":
-            self.u_values = [differential_evolution(h, [(self.intervalx_a, self.intervalx_b)], args=((self.selected_function, fixed_T, x),)).fun for x in self.x_values]
+            self.u_values = [differential_evolution(h, [(self.intervalx_a, self.intervalx_b)], args=((self.selected_function, t, x),)).fun for x in self.x_values]
         else:
             raise ValueError(f"Unknown method {method}")
 
@@ -564,6 +739,10 @@ class HJMoreauAdaptiveDescentVisualizer:
             x_hat, _, _, _, samples  = self.hj_compute_prox_and_grad_GH(self.x_k)
         elif self.integration_method == "HJ_MC":
             x_hat, _, _, _, samples  = self.hj_compute_prox_and_grad_MC(self.x_k)
+        elif self.integration_method == "softmax_prox_MC":    
+            x_hat, _, _, _, samples  = self.softmax_prox_MC(self.x_k)
+        elif self.integration_method == "argmin_prox_MC":    
+            x_hat, _, _, samples  = self.argmin_prox_MC(self.x_k)
 
         hk_parameters = (self.selected_function, fixed_T, self.x_k)
 
@@ -573,7 +752,7 @@ class HJMoreauAdaptiveDescentVisualizer:
         h_values = h(self.x_values, hk_parameters)
 
         # Compute next iteration
-        x_k_plus_1 = self.x_k - alpha * (self.x_k - x_hat)
+        x_k_plus_1 = self.x_k- alpha * (self.x_k- x_hat)
         f_x_k_plus_1 = self.selected_function(x_k_plus_1)
 
         # Display Samples
@@ -603,8 +782,8 @@ class HJMoreauAdaptiveDescentVisualizer:
         plt.scatter(self.x_k, f_xk_value, color='black', zorder=5, label=r'Current Iteration $f(x_k)$', marker='x')
 
         # Accelerated xk
-        acc_f_xk_value = self.selected_function(self.acc_x_k)
-        plt.scatter(self.acc_x_k, acc_f_xk_value, color='blue', zorder=5, label=r'Current Iteration Accelerated $f(x_k)$', marker='x')
+        #acc_f_xk_value = self.selected_function(self.acc_x_k)
+        #plt.scatter(self.acc_x_k, acc_f_xk_value, color='blue', zorder=5, label=r'Current Iteration Accelerated $f(x_k)$', marker='x')
 
         # Mark the global minimum of f(x)
         plt.scatter(self.global_min_x, self.global_min_f, color='cyan', zorder=5, label=r'Global Minima, $f(x_{true})$', marker='o')
@@ -612,17 +791,17 @@ class HJMoreauAdaptiveDescentVisualizer:
         # Plot the point for f(x_{k+1})
         plt.scatter(x_k_plus_1, f_x_k_plus_1, color='magenta', zorder=5, 
                     label=r'Next Iteration $f(x_{k+1})$, for $x_{k+1}=x_k-\alpha T\nabla u(x_k)$', marker='^')
-        acc_x_k_plus_1,grad_k = self.accelerated_gradient_descent(self.momentum_input.value)
+        #acc_x_k_plus_1,grad_k = self.accelerated_gradient_descent(self.momentum_input.value)
 
-        acc_f_xk_value = self.selected_function(acc_x_k_plus_1)
-        plt.scatter(acc_x_k_plus_1, acc_f_xk_value, color='cyan', zorder=5, 
-                    label=r'Next Iteration Accelerated $f(x_{k+1})$', marker='^')
+        #acc_f_xk_value = self.selected_function(acc_x_k_plus_1)
+        #plt.scatter(acc_x_k_plus_1, acc_f_xk_value, color='cyan', zorder=5, 
+        #            label=r'Next Iteration Accelerated $f(x_{k+1})$', marker='^')
 
         plt.plot([x_hat, self.x_k], [f_hat, f_hat], color='red', linewidth=0.8, linestyle=':',label='Line between ' + r' $x_k$ '+f',\n'+r'$prox(x_k)$ and envelope $u(x_k,T)$')
         plt.plot([self.x_k, self.x_k], [f_xk_value, f_hat], color='red', linewidth=0.8, linestyle=':')
             
         # Add titles and labels
-        plt.title(f'Plot To Visualize Moreau Adaptive Descent, T={fixed_T:.2f}')
+        plt.title(f'Plot To Visualize Moreau Adaptive Descent, T={fixed_T:.2f},delta={self.delta_input.value:.3f},N={self.int_samples_input.value}\n Sampling: {self.integration_method}')
         plt.xlabel('x')
         plt.ylabel('y')
         plt.axhline(0, color='black', linewidth=0.5, ls='--')
@@ -650,6 +829,56 @@ class HJMoreauAdaptiveDescentVisualizer:
         plt.legend(loc='best')
 
         return plt
+    
+    def plot_time_evolution(self):
+        """Update the plot based on slider values."""
+        plt.figure(figsize=(10, 6))
+        f_values = self.selected_function(self.x_values)
+
+        # Plotting f(x)
+        plt.plot(self.x_values, f_values, label=r'Intial Condition',color='black')
+
+        # Mark the global minimum of f(x)
+        plt.scatter(self.global_min_x, self.global_min_f, color='black', zorder=5, label=r'Global Minima, $f(x_{true})$', marker='x')
+
+        for t in [0.1, 5, 30, 100]:
+            # Plot Moreau Envelope u(x)
+            self.update_moreau_envelope(t=t)
+            plt.plot(self.x_values, self.u_values, linestyle='--', label=f'HJ-MC Viscous Moreau Envelope, t={t}', linewidth='1.5')
+
+            # self.update_moreau_envelope(method="scipy",t=t)
+            # plt.plot(self.x_values, self.u_values, label=f'Scipy Viscous Moreau Envelope, t={t}')
+
+            
+        # Add titles and labels
+        plt.title(f'Time Evolution of Estimate Moreau Envelope\ndelta={self.delta_input.value:.3f},N={self.int_samples_input.value}\n Sampling: {self.integration_method}')
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.axhline(0, color='black', linewidth=0.5, ls='--')
+        plt.axvline(0, color='black', linewidth=0.5, ls='--')
+
+        # Set limits and grid
+        plt.xlim(self.intervalx_a, self.intervalx_b)
+
+        # Dynamically set the y-limits based on function outputs
+        y_min = np.min(f_values)
+        y_max = np.max(f_values)
+
+        if y_max < 0:
+            # If all values are negative, set the limits to give some visual space
+            plt.ylim(1.5 * y_min, 0)  # Set lower limit 20% below min, upper limit at 0
+        elif y_min > 0:
+            plt.ylim(0.5 * y_min, 1.2 * y_max)  # 20% less than the min if min is positive
+        else:
+            plt.ylim(1.5 * y_min, 1.2 * y_max)  # 20% more than the min if min is zero or negative
+
+        # plt.grid(which='major', linestyle='-', linewidth='0.5')
+        # plt.minorticks_on()
+        # plt.gca().xaxis.set_minor_locator(plt.MultipleLocator(1))
+        # plt.grid(which='minor', linestyle=':', linewidth='0.5')
+        plt.legend(loc='best')
+
+        plt.show
 
     def update_plot_errors(self):
 
@@ -657,9 +886,10 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         # First subplot for error history
         plt.subplot(1, 2, 1)
-        plt.semilogy(self.error_k_hist, marker='*', linestyle='-', label='Gradient Descent SCIPY')
-        plt.semilogy(self.acc_error_k_hist, marker='o', linestyle='-', label='Accelerated Gradient Descent')
-        plt.semilogy(self.error_k_hist_HJ, marker='^', linestyle='-', label='Gradient Descent HJ')
+        if self.display_scipy_ME_bool:
+            plt.semilogy(self.error_k_hist_scipy, marker='*', linestyle='-', label='Gradient Descent SCIPY', color='green')
+        plt.semilogy(self.acc_error_k_hist, marker='o', linestyle='-', label='Accelerated Gradient Descent', color='blue')
+        plt.semilogy(self.error_k_hist, marker='^', linestyle='-', label='Gradient Descent', color='red')
         plt.title('Error History')
         plt.xlabel('Iteration')  # Add x-axis label here
         plt.legend()  # Show legend
@@ -668,9 +898,10 @@ class HJMoreauAdaptiveDescentVisualizer:
 
         # Second subplot for f_k history
         plt.subplot(1, 2, 2)
-        plt.plot(self.f_k_hist, marker='*', linestyle='-', label='Gradient Descent SCIPY')
-        plt.plot(self.acc_f_k_hist, marker='o', linestyle='-', label='Accelerated Method')
-        plt.plot(self.f_k_hist_HJ, marker='^', linestyle='-', label='Gradient Descent HJ')  
+        if self.display_scipy_ME_bool:
+            plt.plot(self.f_k_hist_scipy, marker='*', linestyle='-', label='Gradient Descent SCIPY', color='green')
+        plt.plot(self.acc_f_k_hist, marker='o', linestyle='-', label='Accelerated Method Gradient Descent', color='blue')
+        plt.plot(self.f_k_hist, marker='^', linestyle='-', label='Gradient Descent', color='red')  
         plt.title('f_k History')
         plt.xlabel('Iteration')  # Add x-axis label here
         plt.legend()  # Show legend

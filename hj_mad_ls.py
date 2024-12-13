@@ -13,26 +13,6 @@ seed   = 30
 torch.manual_seed(seed)
 
 
-# ------------------------------------------------------------------------------------------------------------
-# HJ Moreau Adaptive Descent
-# ------------------------------------------------------------------------------------------------------------
-# def weighted_softmax(F, w):
-#     """
-#     Compute the weighted softmax:
-#         weights_line_i = ( exp(F_i - max(F_i))) / sum(exp(F_i - max(F_i)))
-    
-#     Parameters:
-#         z (torch.Tensor): Input tensor of shape (n,).
-#         a (torch.Tensor): weights_line tensor of shape (n,). Must have the same shape as z.
-
-#     Returns:
-#         torch.Tensor: Weighted softmax output of shape (n,).
-#     """
-    # exp_z = torch.exp(F - torch.max(F))  # Shift z for numerical stability
-    # weighted_exp = w * exp_z
-    # norm = torch.sum(weighted_exp)
-    # return weighted_exp / norm
-
 class HJ_MD_LS:
     ''' 
         Hamilton-Jacobi Moreau Adaptive Descent (HJ_MAD) is used to solve nonconvex minimization
@@ -65,7 +45,7 @@ class HJ_MD_LS:
           6) rel_grad_uk_norm_hist    = relative grad norm history of Moreau envelope
     '''
     def __init__(self, delta=100, t = 1e1, int_samples=1000, max_iters=1e4, f_tol = 1e-5,
-                 saturate_tol=1e-5,distribution="Gaussian",delta_dampener=0.8,beta=0.5,verbose=True):
+                 sat_tol=1e-5,distribution="Gaussian",delta_dampener=0.99,beta=0.5,verbose=True):
         # Algorithm Parameters
         self.delta            = delta
         self.t                = t
@@ -76,7 +56,7 @@ class HJ_MD_LS:
         self.distribution = distribution
 
         # Stopping Criteria
-        self.saturate_tol     = saturate_tol
+        self.saturate_tol     = sat_tol
         self.max_iters        = max_iters
         self.f_tol            = f_tol
 
@@ -89,8 +69,8 @@ class HJ_MD_LS:
 
     def f_line(self, tau, xk, direction):
 
-        xk_expanded = xk.expand(self.int_samples_line, self.n_features)
-        direction_expanded = direction.expand(self.int_samples_line, self.n_features)
+        xk_expanded = xk.expand(self.int_samples, self.n_features)
+        direction_expanded = direction.expand(self.int_samples, self.n_features)
 
         y = xk_expanded + tau * direction_expanded
        
@@ -123,7 +103,7 @@ class HJ_MD_LS:
           shifted_exponent = rescaled_exponent - torch.max(rescaled_exponent)
 
           # Compute Exponential Term
-          exp_term = torch.exp(shifted_exponent)
+          exp_term = torch.exp(shifted_exponent).squeeze().double()
 
           # Compute the Denominator Integral
           # Compute weights_line
@@ -210,10 +190,10 @@ class HJ_MD_LS:
 
         # Update delta if the proximal point is worse than the current point
         if self.verbose:
-            print(f"Samples taken into account by softmax: {w[w>0.0].shape[0]}")
-            print(f"softmax f(y): {f_prox}, f(xk): {f_xk}")
+            print(f"    Samples taken into account by softmax: {w[w>0.0].shape[0]}")
+            print(f"    f(prox): {f_prox} | f(xk): {f_xk}")
         if f_prox > f_xk:
-            deltak *= self.delta_dampener
+            deltak = deltak*self.delta_dampener
 
         # Improve the proximal point using line search
         prox_xk_new = self.improve_prox_with_line_search(xk,prox_xk,deltak)
@@ -221,7 +201,10 @@ class HJ_MD_LS:
         if f_prox_new < f_prox:
             prox_xk = prox_xk_new
             if self.verbose:
-                print(f"Improvement from line search.")
+                print(f"    Improvement from line search | f(prox_ls): {f_prox_new}")
+        else:
+            if self.verbose:
+                print(f"    No improvement from line search | f(prox_ls): {f_prox_new}")
 
         # Return the proximal point for xk
         return prox_xk, deltak
@@ -264,27 +247,27 @@ class HJ_MD_LS:
 
         for k in range(self.max_iters):
             # Compute Proximal Point and Function Value
-            prox_xk = self.compute_prox(xk,deltak)
+            prox_xk,deltak = self.compute_prox(xk,deltak)
             f_prox = self.f(prox_xk.view(1, self.n_features))
 
             # Update Optimal xk
             if f_prox < f_k:
-                x_opt = xk
+                x_opt = prox_xk
 
 
             # Stopping Criteria
             if f_prox < self.f_tol: # f value is less than tolerance
                 if self.verbose:
-                    print(f'HJ-MAD converged to tolerence {self.f_tol:6.2e}')
-                    print(f'iter = {k} | f_value =  {f_prox:6.2e}')
+                    print(f'    HJ-MAD converged to tolerence {self.f_tol:6.2e}')
+                    print(f'    iter = {k}: f_value =  {f_prox}')
                 break
-            if k > 0: # Check for saturation
-                relative_gradient_error = np.abs(np.abs(torch.norm(xk)/torch.norm(prox_xk))-1)
-                if relative_gradient_error < self.saturate_tol:
-                    if self.verbose:
-                        print('HJ-MAD converged due to error saturation')
-                        print(f"Relative Gradient Error: {relative_gradient_error} | saturate_tol: {self.saturate_tol}")
-                    break
+            # if k > 0: # Check for saturation
+            #     relative_gradient_error = np.abs(np.abs(torch.norm(xk)/torch.norm(prox_xk))-1)
+            #     if relative_gradient_error < self.saturate_tol:
+            #         if self.verbose:
+            #             print('HJ-MAD converged due to error saturation')
+            #             print(f"Relative Gradient Error: {relative_gradient_error} | saturate_tol: {self.saturate_tol}")
+            #         break
 
             # Update xk
             if k == 0:
@@ -302,4 +285,4 @@ class HJ_MD_LS:
             if self.verbose:
                 print(fmt.format(k+1, fk_hist[k+1], deltak))
 
-        return x_opt, fk_hist[:k+1], #delta_hist[:k+1]
+        return x_opt, k+1 #delta_hist[:k+1]

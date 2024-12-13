@@ -446,8 +446,8 @@ class HJMoreauAdaptiveDescentVisualizer:
         # Compute Moreau Envelope
         #v_delta = np.mean(np.exp(exponent))
         h_parameters = (self.selected_function, t, x_k)
-        #uk = h(prox_k, h_parameters)
-        uk = - delta * np.log(np.mean(np.exp(exponent))+ 1e-200)
+        uk = h(prox_k, h_parameters)
+        #uk = - delta * np.log(np.mean(np.exp(exponent))+ 1e-200)
 
         return prox_k, grad_k, uk, line_search_iterations, y
 

@@ -58,14 +58,10 @@ class HJ_MD_LS:
 
         Outputs:
           1) x_opt                    = optimal x_value approximation
-          2) xk_hist                  = update history
-          3) tk_hist                  = time history
-          4) fk_hist                  = function value history
-          5) xk_error_hist            = error to true solution history 
-          6) rel_grad_uk_norm_hist    = relative grad norm history of Moreau envelope
+          2) fk_hist                  = function value history
     '''
-    def __init__(self, f, f_numpy, f_name, x_true, delta=0.1, t = 1e1, int_samples=1000,int_samples_line=150, max_iters=5e4,
-                 tol=5e-2,rescale0=1e-1,saturate_tol=1e-9,integration_method="MC",delta_dampener=0.8,verbose=True,plot=False):
+    def __init__(self, f, f_numpy, f_name, x_true, delta=0.1, t = 1e2, int_samples=1000,int_samples_line=150, max_iters=5e4,
+                 tol=5e-2,rescale0=1e-1,saturate_tol=1e-9,integration_method="MC",distribution="Cauchy",delta_dampener=0.8,verbose=True,plot=False,beta=0.0):
       
         self.delta            = delta
         self.f                = f
@@ -82,8 +78,9 @@ class HJ_MD_LS:
         self.saturate_tol     = saturate_tol
         self.plot             = plot
         self.integration_method = integration_method
-        self.distribution = "Cauchy"
+        self.distribution = distribution
         self.delta_dampener =delta_dampener
+        self.beta = beta
 
 
         self.n_features = x_true.shape[0] 
@@ -193,13 +190,16 @@ class HJ_MD_LS:
             ("f_name", self.f_name),
             ("Dimensions/Features", self.n_features),
             ("delta", self.delta),
+            ("delta_dampener", self.delta_dampener),
             ("t", format_scientific(self.t)),
             ("int_samples", format_scientific(self.int_samples)),
             ("int_samples_line", format_scientific(self.int_samples_line)),
             ("max_iters", format_scientific(self.max_iters)),
             ("tol", self.tol),
+            ("distribution", self.distribution),
             ("rescale0", format_scientific(self.rescale0)),
             ("saturate_tol", format_scientific(self.saturate_tol)),
+            ("beta", self.beta),
         ]
         
         # Print the table
@@ -455,16 +455,16 @@ class HJ_MD_LS:
             # Apply Rescaling to time
             t_rescaled = t/rescale_factor
 
-            gamma = np.sqrt(delta*t_rescaled)
+            standard_deviation = np.sqrt(delta*t_rescaled)
 
             # Compute Perturbed Points
             if self.distribution == "Cauchy":
-                cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=gamma)
+                cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=standard_deviation)
 
                 # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
                 y = cauchy_dist.sample((self.int_samples,))
             else:
-                y = xk_expanded + gamma*torch.randn(self.int_samples, self.n_features)
+                y = xk_expanded + standard_deviation*torch.randn(self.int_samples, self.n_features)
 
             # Compute Function Values
             f_values = self.f(y)  
@@ -535,6 +535,7 @@ class HJ_MD_LS:
         xk_hist = torch.zeros(self.max_iters+1, self.n_features)
         xk_error_hist = torch.zeros(self.max_iters+1)
         fk_hist = torch.zeros(self.max_iters+1)
+        delta_hist = torch.zeros(self.max_iters+1)
 
         f_k = self.f(xk.view(1, self.n_features))
         f_k_old = f_k
@@ -543,6 +544,7 @@ class HJ_MD_LS:
         xk_hist[0, :] = xk
         xk_error_hist[0] = error_k
         fk_hist[0] = f_k
+        delta_hist[0] = self.delta
 
         # Define Outputs
         fmt = '[{:3d}]: fk = {:6.2e} | xk_err = {:6.2e} '
@@ -606,9 +608,13 @@ class HJ_MD_LS:
                 f_prox = f_prox_new
               else: # Don't update prox_xk if we don't have improvement
                 print("No improvement in line search")
+                
+            if k == 0:
+                first_moment = prox_xk
 
             # Only Update xk if we have improvement in function value
-            xk = prox_xk
+            first_moment = self.beta*first_moment+(1-self.beta)*(xk-prox_xk)
+            xk = xk - first_moment
             f_k = f_prox # Update function value
             error_k = torch.norm(xk - self.x_true)
 
@@ -624,6 +630,7 @@ class HJ_MD_LS:
             xk_hist[k+1, :] = xk
             xk_error_hist[k+1] = error_k
             fk_hist[k+1] = f_k
+            delta_hist[k+1] = self.delta
             f_k_old = f_k
 
             if self.verbose:
@@ -642,7 +649,7 @@ class HJ_MD_LS:
 
 
         successful_ls_portion = successful_ls_count/(k)
-        return xk, xk_hist[:k+1,:], xk_error_hist[:k+1], fk_hist[:k+1], successful_ls_portion
+        return xk, xk_hist[:k+1,:], xk_error_hist[:k+1], fk_hist[:k+1], delta_hist[:k+1], successful_ls_portion
     
     def plot_1d_prox(self, xk, prox_xk_old, prox_xk_new, tk, num_points=1000):
         """

@@ -236,6 +236,7 @@ class HJ_MD_LS:
         #delta_hist = torch.zeros(self.max_iters+1)
         f_k = self.f(xk.view(1, self.n_features))
         fk_hist[0] = f_k
+        f_opt = f_k
         #delta_hist[0] = self.delta
 
         # Define Outputs
@@ -253,6 +254,7 @@ class HJ_MD_LS:
             # Update Optimal xk
             if f_prox < f_k:
                 x_opt = prox_xk
+                f_opt = f_prox
 
 
             # Stopping Criteria
@@ -285,4 +287,4 @@ class HJ_MD_LS:
             if self.verbose:
                 print(fmt.format(k+1, fk_hist[k+1], deltak))
 
-        return x_opt, k+1 #delta_hist[:k+1]
+        return x_opt, f_opt, k+1 #delta_hist[:k+1]

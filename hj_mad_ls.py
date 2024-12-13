@@ -192,7 +192,7 @@ class HJ_MD_LS:
         if self.verbose:
             print(f"    Samples taken into account by softmax: {w[w>0.0].shape[0]}")
             print(f"    f(prox): {f_prox} | f(xk): {f_xk}")
-        if f_prox > f_xk:
+        if f_prox >= f_xk:
             deltak = deltak*self.delta_dampener
 
         # Improve the proximal point using line search
@@ -209,7 +209,7 @@ class HJ_MD_LS:
         # Return the proximal point for xk
         return prox_xk, deltak
 
-    def run(self, f, x0):
+    def run(self, f, x0,delta=None):
         """
         Runs the coordinate descent optimization process.
 
@@ -229,7 +229,11 @@ class HJ_MD_LS:
         xk = x0.clone()
         x_opt = x0.clone()
         self.n_features = x0.shape[1]
-        deltak = self.delta
+
+        if delta is None:
+            deltak = self.delta
+        else:
+            deltak = delta
 
         # Initialize History
         fk_hist = torch.zeros(self.max_iters+1)
@@ -252,9 +256,9 @@ class HJ_MD_LS:
             f_prox = self.f(prox_xk.view(1, self.n_features))
 
             # Update Optimal xk
-            if f_prox < f_k:
-                x_opt = prox_xk
-                f_opt = f_prox
+            # if f_prox < f_k:
+            #     x_opt = prox_xk
+            #     f_opt = f_prox
 
 
             # Stopping Criteria
@@ -286,5 +290,6 @@ class HJ_MD_LS:
 
             if self.verbose:
                 print(fmt.format(k+1, fk_hist[k+1], deltak))
-
-        return x_opt, f_opt, k+1 #delta_hist[:k+1]
+        f_final = f_prox
+        x_final = prox_xk
+        return x_final, f_final, k+1, deltak #delta_hist[:k+1]

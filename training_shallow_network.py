@@ -38,6 +38,7 @@ class ShallowNet(nn.Module):
         x = x @ self.coeffs     # Compute sum of c_j * ReLU(...)
         return x
 
+
 # Initialize model, loss function, and optimizer
 model = ShallowNet(n_neurons)
 criterion = nn.MSELoss()

@@ -47,7 +47,7 @@ class HJ_MD_LS:
     def __init__(self, delta=100, t = 1e1, int_samples=1000, max_iters=1e4, f_tol = 1e-5,
                  distribution="Gaussian",beta=0.0, momentum=0.0,verbose=True,
                  line_search=True, stepsize=0.1, 
-                 adaptive_delta=True, adaptive_delta_params=[1e-2,0.8,1.2],
+                 adaptive_delta=True, adaptive_delta_params=[1e-2,0.9,1.2],
                  adaptive_time=False, adaptive_time_params=[5e6,1e8,1.1,0.99,1.01]):
         
         
@@ -272,6 +272,7 @@ class HJ_MD_LS:
             print(fmt.format(0, fk_hist[0], deltak, tk))
 
         saturation_count = 0
+        increase_sample = True
 
         for k in range(self.max_iters):
             # Compute Proximal Point
@@ -281,7 +282,7 @@ class HJ_MD_LS:
             # Update Delta
             if self.adaptive_delta:
                 # Dampen delta if the proximal point is worse than the current point
-                if f_prox >= fk: #1.1*fk:
+                if f_prox >= 1.1*fk: #1.1*fk:
                     if self.verbose:
                         print(f"    f(xk): {fk.item()} | f(prox): {f_prox.item()}")
                     deltak *= self.delta_minus
@@ -293,8 +294,13 @@ class HJ_MD_LS:
                     relative_gradient_error = torch.abs(torch.abs(torch.norm(fk_hist[k] )/torch.norm(fk_hist[k-5] ))-1)
                     if relative_gradient_error < self.saturate_tol:
                         deltak *= self.delta_plus
-                        tk *= self.t_plus
+                        #tk *= self.t_plus
                 saturation_count += 1
+            
+            if fk < 1e-3 and increase_sample:
+                self.int_samples *= 2
+                tk *= 10
+                increase_sample = False
 
             # Line Search
             if self.line_search:

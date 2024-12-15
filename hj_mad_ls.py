@@ -45,38 +45,57 @@ class HJ_MD_LS:
           6) rel_grad_uk_norm_hist    = relative grad norm history of Moreau envelope
     '''
     def __init__(self, delta=100, t = 1e1, int_samples=1000, max_iters=1e4, f_tol = 1e-5,
-                 sat_tol=1e-5,distribution="Gaussian",delta_dampener=0.99,beta=0.5,verbose=True):
+                 distribution="Gaussian",beta=0.0, momentum=0.0,verbose=True,
+                 line_search=True, stepsize=0.1, 
+                 adaptive_delta=True, adaptive_delta_params=[1e-2,0.8,1.2],
+                 adaptive_time=False, adaptive_time_params=[5e6,1e8,1.1,0.99,1.01]):
+        
+        
         # Algorithm Parameters
         self.delta            = delta
         self.t                = t
         self.int_samples      = int_samples
-
-        self.delta_dampener =delta_dampener
-        self.beta = beta
-        self.distribution = distribution
+        self.distribution     = distribution
 
         # Stopping Criteria
-        self.saturate_tol     = sat_tol
         self.max_iters        = max_iters
         self.f_tol            = f_tol
 
+        ### Optional Parameters ###
+        
+        # Adaptive Delta
+        self.adaptive_delta = adaptive_delta
+        self.saturate_tol   = adaptive_delta_params[0]
+        self.delta_minus     =  adaptive_delta_params[1]
+        self.delta_plus      =  adaptive_delta_params[2]
+
+        # Adaptive Time
+        self.adaptive_time = adaptive_time
+        self.t_min = adaptive_time_params[0]
+        self.t_max = adaptive_time_params[1]
+        self.theta = adaptive_time_params[2]
+        self.t_minus = adaptive_time_params[3]
+        self.t_plus = adaptive_time_params[4]
+
+        # Line Search
+        self.line_search = line_search
+        if line_search:
+            self.stepsize = 1.0 # Line search finds the optimal step size
+            # Generate Hermite Quadrature Points in R^1
+            z_line, weights_line = roots_hermite(int_samples)
+            self.z_line = torch.tensor(z_line, dtype=torch.double)
+            self.weights_line = torch.tensor(weights_line, dtype=torch.double)
+        else:
+            self.stepsize = stepsize
+
+        # Acceleration Parameters
+        self.beta = beta
+        self.momentum = momentum
+
+        # Output Parameters
         self.verbose          = verbose
-
-        # Generate Hermite Quadrature Points in R^1
-        z_line, weights_line = roots_hermite(int_samples)
-        self.z_line = torch.tensor(z_line, dtype=torch.double)
-        self.weights_line = torch.tensor(weights_line, dtype=torch.double)
-
-    def f_line(self, tau, xk, direction):
-
-        xk_expanded = xk.expand(self.int_samples, self.n_features)
-        direction_expanded = direction.expand(self.int_samples, self.n_features)
-
-        y = xk_expanded + tau * direction_expanded
-       
-        return self.f(y)
     
-    def improve_prox_with_line_search(self,xk, prox_xk,deltak):
+    def improve_prox_with_line_search(self,xk, prox_xk,deltak,tk):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
             Corresponding to the Proximal Operator.
@@ -85,19 +104,25 @@ class HJ_MD_LS:
         direction = (xk - prox_xk)/torch.norm(xk - prox_xk)
         tau_xk = 0#-torch.norm(xk - prox_xk)
 
+        xk_expanded = xk.expand(self.int_samples, self.n_features)
+        direction_expanded = direction.expand(self.int_samples, self.n_features)
+
         rescale_factor=1
         while True:
           # Apply Rescaling to time
-          t_rescaled = self.t/rescale_factor
+          t_rescaled = tk/rescale_factor
 
           sigma = np.sqrt(2*deltak*t_rescaled)
 
           # Compute Function Values
           tau = tau_xk - self.z_line*sigma # Size (int_samples,1)
-          h_values = self.f_line(tau.view(-1, 1),xk, direction) # Size (int_samples,1)
+
+          # Convert into f form
+          y = xk_expanded + tau.view(-1, 1) * direction_expanded
+          f_values = self.f(y) # Size (int_samples,1)
 
           # Apply Rescaling to Exponent
-          rescaled_exponent = - rescale_factor*h_values/ deltak
+          rescaled_exponent = - rescale_factor*f_values/ deltak
 
           # Remove Max Exponent to prevent Overflow
           shifted_exponent = rescaled_exponent - torch.max(rescaled_exponent)
@@ -130,7 +155,7 @@ class HJ_MD_LS:
         
         return prox_xk_new
     
-    def compute_prox(self,xk,deltak):
+    def compute_prox(self,xk,deltak,tk):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
             Corresponding to the Proximal Operator.
@@ -144,7 +169,7 @@ class HJ_MD_LS:
 
         while True:
             # Apply Rescaling to time
-            t_rescaled = self.t/rescale_factor
+            t_rescaled = tk/rescale_factor
 
             standard_deviation = np.sqrt(deltak*t_rescaled)
 
@@ -180,36 +205,34 @@ class HJ_MD_LS:
                 iterations += 1
             else:
                 break
-        
-        self.rescale0 = rescale_factor
 
         prox_xk = torch.matmul(w.t(), y)
-        prox_xk = prox_xk.view(-1,1).t()
-        f_prox = self.f(prox_xk).item()
-        f_xk = self.f(xk.expand(1, self.n_features)).item()
 
         # Update delta if the proximal point is worse than the current point
         if self.verbose:
-            print(f"    Samples taken into account by softmax: {w[w>0.0].shape[0]}")
-            print(f"    f(prox): {f_prox} | f(xk): {f_xk}")
-        if f_prox >= f_xk:
-            deltak = deltak*self.delta_dampener
-
-        # Improve the proximal point using line search
-        prox_xk_new = self.improve_prox_with_line_search(xk,prox_xk,deltak)
-        f_prox_new = self.f(prox_xk_new.view(1, self.n_features))
-        if f_prox_new < f_prox:
-            prox_xk = prox_xk_new
-            if self.verbose:
-                print(f"    Improvement from line search | f(prox_ls): {f_prox_new}")
-        else:
-            if self.verbose:
-                print(f"    No improvement from line search | f(prox_ls): {f_prox_new}")
+            print(f"    Number of non-zero softmax weights on samples: {w[w>0.0].shape[0]}")
 
         # Return the proximal point for xk
-        return prox_xk, deltak
+        return prox_xk
 
-    def run(self, f, x0,delta=None):
+    def update_time(self, tk, rel_grad_uk_norm):
+      '''
+        time step rule
+
+        if rel grad norm too small, increase tk (with maximum T).
+        else if rel grad norm is too "big", decrease tk with minimum (t_min)
+      '''
+
+      if rel_grad_uk_norm <= self.theta:
+        # Decrease t when relative gradient norm is smaller than theta
+        tk = max(self.t_minus*tk, self.t_min)
+      else:
+        # Increas otherwise t when relative gradient norm is smaller than theta
+        tk = min(self.t_plus*tk, self.t_max)
+
+      return tk
+    
+    def run(self, f, x0):
         """
         Runs the coordinate descent optimization process.
 
@@ -227,69 +250,106 @@ class HJ_MD_LS:
         # Function Parameter
         self.f = f
         xk = x0.clone()
-        x_opt = x0.clone()
-        self.n_features = x0.shape[1]
-
-        if delta is None:
-            deltak = self.delta
-        else:
-            deltak = delta
+        xk_minus_1 = x0.clone()
+        tk = self.t
+        deltak = self.delta
 
         # Initialize History
+        self.n_features = x0.shape[1]
         fk_hist = torch.zeros(self.max_iters+1)
-        #delta_hist = torch.zeros(self.max_iters+1)
-        f_k = self.f(xk.view(1, self.n_features))
-        fk_hist[0] = f_k
-        f_opt = f_k
-        #delta_hist[0] = self.delta
+        deltak_hist = torch.zeros(self.max_iters+1)
+        tk_hist = torch.zeros(self.max_iters+1)
+        fk = self.f(xk.view(1, self.n_features))
+        fk_hist[0] = fk
+        deltak_hist[0] = deltak
+        tk_hist[0] = tk
 
         # Define Outputs
-        fmt = '[{:3d}]: fk = {:6.2e} | delta = {:6.2e}'
+        fmt = '[{:3d}]: fk = {:6.2e} | deltak = {:6.2e} | tk = {:6.2e}'
         if self.verbose:
             print('-------------------------- RUNNING HJ-MAD-LS Algorithm ---------------------------')
             print('dimension = ', self.n_features, 'n_samples = ', self.int_samples)
-            print(fmt.format(0, fk_hist[0], deltak))
+            print(fmt.format(0, fk_hist[0], deltak, tk))
+
+        saturation_count = 0
 
         for k in range(self.max_iters):
-            # Compute Proximal Point and Function Value
-            prox_xk,deltak = self.compute_prox(xk,deltak)
+            # Compute Proximal Point
+            prox_xk = self.compute_prox(xk,deltak,tk)
             f_prox = self.f(prox_xk.view(1, self.n_features))
 
-            # Update Optimal xk
-            # if f_prox < f_k:
-            #     x_opt = prox_xk
-            #     f_opt = f_prox
+            # Update Delta
+            if self.adaptive_delta:
+                # Dampen delta if the proximal point is worse than the current point
+                if f_prox >= fk: #1.1*fk:
+                    if self.verbose:
+                        print(f"    f(xk): {fk.item()} | f(prox): {f_prox.item()}")
+                    deltak *= self.delta_minus
+                    #tk *= self.t_minus
+    
+                # Prevent delta from becoming too small
+                elif saturation_count > 5: # Check for saturation
+                    saturation_count = 0
+                    relative_gradient_error = torch.abs(torch.abs(torch.norm(fk_hist[k] )/torch.norm(fk_hist[k-5] ))-1)
+                    if relative_gradient_error < self.saturate_tol:
+                        deltak *= self.delta_plus
+                        tk *= self.t_plus
+                saturation_count += 1
 
+            # Line Search
+            if self.line_search:
+                prox_xk_new = self.improve_prox_with_line_search(xk,prox_xk,deltak,tk)
+                f_prox_new = self.f(prox_xk_new.view(1, self.n_features)).item()
+                if f_prox_new < 0.9*f_prox:
+                    prox_xk = prox_xk_new
+                    f_prox = f_prox_new
+                    if self.verbose:
+                        print(f"    Improvement from line search | f(prox_ls): {f_prox_new}")
+                else:
+                    if self.verbose:
+                        print(f"    No improvement from line search | f(prox_ls): {f_prox_new}")
 
-            # Stopping Criteria
-            if f_prox < self.f_tol: # f value is less than tolerance
-                if self.verbose:
-                    print(f'    HJ-MAD converged to tolerence {self.f_tol:6.2e}')
-                    print(f'    iter = {k}: f_value =  {f_prox}')
-                break
-            # if k > 0: # Check for saturation
-            #     relative_gradient_error = np.abs(np.abs(torch.norm(xk)/torch.norm(prox_xk))-1)
-            #     if relative_gradient_error < self.saturate_tol:
-            #         if self.verbose:
-            #             print('HJ-MAD converged due to error saturation')
-            #             print(f"Relative Gradient Error: {relative_gradient_error} | saturate_tol: {self.saturate_tol}")
-            #         break
+            # Momentum (yk = xk if momentum = 0)
+            yk = xk + self.momentum * (xk - xk_minus_1)
+            xk_minus_1 = xk
 
-            # Update xk
+            # Update first moment (first_moment = (yk-prox_xk) if beta = 0)
             if k == 0:
                 first_moment = prox_xk
+                
 
-            # Update xk
-            first_moment = self.beta*first_moment+(1-self.beta)*(xk-prox_xk)
-            xk = xk - first_moment
-            f_k = self.f(xk.view(1, self.n_features))
+            first_moment = self.beta*first_moment+(1-self.beta)*(yk-prox_xk)
+
+            # Apply Gradient Descent
+            xk = yk - self.stepsize*first_moment
+            fk = self.f(xk.view(1, self.n_features))
+            
+            # Update time
+            if self.adaptive_time:
+                grad_norm = torch.norm(first_moment)
+                if k >0:
+                    rel_grad_norm = grad_norm/(grad_norm_old + 1e-12)
+                    tk = self.update_time(tk,rel_grad_norm)
+                grad_norm_old = grad_norm
+
+            # Print Iteration Information
+            if self.verbose:
+                print(fmt.format(k+1, fk.item(), deltak, tk))
 
             # Update History
-            fk_hist[k+1] = f_k
-            #delta_hist[k+1] = self.delta
+            fk_hist[k+1] = fk
+            deltak_hist[k+1] = deltak
+            tk_hist[k+1] = tk
 
+            # Stopping Criteria
+            if fk < self.f_tol: # f value is less than tolerance
+                if self.verbose:
+                    print(f'    HJ-MAD converged to tolerence {self.f_tol:6.2e}')
+                    print(f'    iter = {k}: f_value =  {fk}')
+                break
+        
+        if k == self.max_iters-1:
             if self.verbose:
-                print(fmt.format(k+1, fk_hist[k+1], deltak))
-        f_final = f_prox
-        x_final = prox_xk
-        return x_final, f_final, k+1, deltak #delta_hist[:k+1]
+                print(f"    HJ-MAD did not converge after {self.max_iters} iterations")
+    
+        return xk, fk, fk_hist[0:k+1], deltak_hist[0:k+1],tk_hist[0:k+1], k+1

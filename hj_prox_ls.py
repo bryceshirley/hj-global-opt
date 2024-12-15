@@ -177,6 +177,17 @@ class HJ_PROX_LS:
 
         # Compute Proximal Point and Function Value
         prox = self.compute_prox(x,f)
+        fprox = f(prox.view(1, self.n_features))
+
+        # Update Delta
+        if fprox < fx:
+            self.delta = self.delta * 1.01
+            if self.verbose:
+                print(f'Loss decreased: {fx} -> {fprox}. Delta: {self.delta}')
+        else:
+            self.delta = self.delta * self.delta_dampener
+            if self.verbose:
+                print(f'Loss increased: {fx} -> {fprox}. Delta: {self.delta}')
 
         # Update x
         if first_moment is None or self.beta == 0.0:
@@ -184,15 +195,5 @@ class HJ_PROX_LS:
         first_moment = self.beta*first_moment+(1-self.beta)*(x-prox)
         x_new = x - first_moment
         fx_new = f(x_new.view(1, self.n_features))
-
-        # Update Delta
-        if fx_new < fx:
-            #self.delta = self.delta * 1.01
-            if self.verbose:
-                print(f'Loss decreased: {fx} -> {fx_new}. Delta: {self.delta}')
-        else:
-            self.delta = self.delta * self.delta_dampener
-            if self.verbose:
-                print(f'Loss increased: {fx} -> {fx_new}. Delta: {self.delta}')
 
         return x_new, fx_new, first_moment

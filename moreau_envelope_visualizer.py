@@ -791,30 +791,35 @@ class HJMoreauAdaptiveDescentVisualizer:
         f_x_k_plus_1 = self.selected_function(x_k_plus_1)
 
         # Display Samples
-        plt.figure(figsize=(10, 6))
-        if self.display_samples_bool:
-            samples_func_values = np.array([self.selected_function(sample) for sample in samples])# + (1 / (2 * tk)) * (sample - xk) ** 2
-            plt.scatter(samples, samples_func_values,color='blue', label=r'Samples', zorder=4, marker='*')
+        # plt.figure(figsize=(10, 6))
+        # if self.display_samples_bool:
+        #     samples_func_values = np.array([self.selected_function(sample) for sample in samples])# + (1 / (2 * tk)) * (sample - xk) ** 2
+        #     plt.scatter(samples, samples_func_values,color='blue', label=r'Samples', zorder=4, marker='*')
 
         # Plotting f(x)
-        plt.plot(self.x_values, f_values, label=r'$f(x)$', color='blue')
-        plt.plot(self.x_values, h_values, label=r'Prox function to minimize at $x_k$, $f(x) + \frac{1}{2T} (x - x_k)^2$', color='orange')
+        plt.plot(self.x_values, f_values, label=r'$f(x)$', color='black')
+        plt.plot(self.x_values, h_values, label=r'Function to minimize at $x_k$, $f(z) + \frac{1}{2t} ||z - x_k||^2$', color='orange')
 
         # Plot Moreau Envelope u(x)
-        self.update_moreau_envelope()
-        plt.plot(self.x_values, self.u_values, label=r'HJ Moreau Envelope, $u^{\delta}(x,T)$', color='green')
-        plt.scatter(self.x_k, f_hat, label=r'Moreau Envelope at $x_k$, $u(x_k,T)$', color='red', marker='x')
-
-        if self.display_scipy_ME_bool:
-            self.update_moreau_envelope(method="scipy")
-            plt.plot(self.x_values, self.u_values, label=r'Scipy Moreau Envelope, $u(x,T)$', color='black')
-
-        # Mark the Prox at x_k
-        plt.scatter(x_hat, f_hat, color='red', zorder=5, label=r'Proximal at x_k, $\hat{x}_k=prox_{Tf}(x_k)$')
+        # self.update_moreau_envelope()
+        # plt.plot(self.x_values, self.u_values, label=r'HJ Moreau Envelope, $u^{\delta}(x,T)$', color='green')
+        # plt.scatter(self.x_k, f_hat, label=r'Moreau Envelope at $x_k$, $u(x_k,T)$', color='red', marker='x')
 
         # Calculate the value of f at x_k
         f_xk_value = self.selected_function(self.x_k)
         plt.scatter(self.x_k, f_xk_value, color='black', zorder=5, label=r'Current Iteration $f(x_k)$', marker='x')
+
+        if self.display_scipy_ME_bool:
+            self.update_moreau_envelope(method="scipy")
+            plt.plot(self.x_values, self.u_values, label=r'Scipy Moreau Envelope, $u(x,t)$', color='blue')
+            x_hat_scipy, _ = self.scipy_compute_prox_and_grad(self.x_k)
+            f_hat_scipy = h(x_hat_scipy, hk_parameters)
+            plt.scatter(x_hat_scipy, f_hat_scipy, color='red', zorder=5, label=r'$prox_{tf}(x_k)$')
+            plt.plot([x_hat_scipy, self.x_k], [f_hat_scipy, f_hat_scipy], color='red', linewidth=0.8, linestyle=':')#,label='Line between ' + r' $x_k$ '+f',\n'+r'$prox(x_k)$ and envelope $u(x_k,T)$')
+            plt.plot([self.x_k, self.x_k], [f_xk_value, f_hat_scipy], color='red', linewidth=0.8, linestyle=':')
+
+        # Mark the Prox at x_k
+        #plt.scatter(x_hat, f_hat, color='red', zorder=5, label=r'Proximal at x_k, $\hat{x}_k=prox_{Tf}(x_k)$')
 
         # Accelerated xk
         #acc_f_xk_value = self.selected_function(self.acc_x_k)
@@ -824,19 +829,19 @@ class HJMoreauAdaptiveDescentVisualizer:
         plt.scatter(self.global_min_x, self.global_min_f, color='cyan', zorder=5, label=r'Global Minima, $f(x_{true})$', marker='o')
 
         # Plot the point for f(x_{k+1})
-        plt.scatter(x_k_plus_1, f_x_k_plus_1, color='magenta', zorder=5, 
-                    label=r'Next Iteration $f(x_{k+1})$, for $x_{k+1}=x_k-\alpha T\nabla u(x_k)$', marker='^')
+        # plt.scatter(x_k_plus_1, f_x_k_plus_1, color='magenta', zorder=5, 
+        #             label=r'Next Iteration $f(x_{k+1})$, for $x_{k+1}=x_k-\alpha T\nabla u(x_k)$', marker='^')
         #acc_x_k_plus_1,grad_k = self.accelerated_gradient_descent(self.momentum_input.value)
 
         #acc_f_xk_value = self.selected_function(acc_x_k_plus_1)
         #plt.scatter(acc_x_k_plus_1, acc_f_xk_value, color='cyan', zorder=5, 
         #            label=r'Next Iteration Accelerated $f(x_{k+1})$', marker='^')
 
-        plt.plot([x_hat, self.x_k], [f_hat, f_hat], color='red', linewidth=0.8, linestyle=':',label='Line between ' + r' $x_k$ '+f',\n'+r'$prox(x_k)$ and envelope $u(x_k,T)$')
-        plt.plot([self.x_k, self.x_k], [f_xk_value, f_hat], color='red', linewidth=0.8, linestyle=':')
+        # plt.plot([x_hat, self.x_k], [f_hat, f_hat], color='red', linewidth=0.8, linestyle=':',label='Line between ' + r' $x_k$ '+f',\n'+r'$prox(x_k)$ and envelope $u(x_k,T)$')
+        # plt.plot([self.x_k, self.x_k], [f_xk_value, f_hat], color='red', linewidth=0.8, linestyle=':')
             
         # Add titles and labels
-        plt.title(f'Plot To Visualize Moreau Adaptive Descent, T={fixed_T:.2f},delta={self.delta_input.value:.3f},N={self.int_samples_input.value}\n Sampling: {self.integration_method}')
+        plt.title(f'Visualization of Moreau Envelope for f(x), T={fixed_T:.2f}')#,delta={self.delta_input.value:.3f},N={self.int_samples_input.value}\n Sampling: {self.integration_method}')
         plt.xlabel('x')
         plt.ylabel('y')
         plt.axhline(0, color='black', linewidth=0.5, ls='--')
@@ -857,10 +862,10 @@ class HJMoreauAdaptiveDescentVisualizer:
         else:
             plt.ylim(1.2 * y_min, 1.2 * y_max)  # 20% more than the min if min is zero or negative
 
-        plt.grid(which='major', linestyle='-', linewidth='0.5')
-        plt.minorticks_on()
-        plt.gca().xaxis.set_minor_locator(plt.MultipleLocator(1))
-        plt.grid(which='minor', linestyle=':', linewidth='0.5')
+        # plt.grid(which='major', linestyle='-', linewidth='0.5')
+        # plt.minorticks_on()
+        # plt.gca().xaxis.set_minor_locator(plt.MultipleLocator(1))
+        # plt.grid(which='minor', linestyle=':', linewidth='0.5')
         plt.legend(loc='best')
 
         return plt

@@ -13,93 +13,206 @@ seed   = 30
 torch.manual_seed(seed)
 
 
-# ------------------------------------------------------------------------------------------------------------
-# HJ Moreau Adaptive Descent
-# ------------------------------------------------------------------------------------------------------------
-# def weighted_softmax(F, w):
-#     """
-#     Compute the weighted softmax:
-#         weights_line_i = ( exp(F_i - max(F_i))) / sum(exp(F_i - max(F_i)))
-    
-#     Parameters:
-#         z (torch.Tensor): Input tensor of shape (n,).
-#         a (torch.Tensor): weights_line tensor of shape (n,). Must have the same shape as z.
+from typing import Callable, Literal, Optional, Tuple
 
-#     Returns:
-#         torch.Tensor: Weighted softmax output of shape (n,).
-#     """
-    # exp_z = torch.exp(F - torch.max(F))  # Shift z for numerical stability
-    # weighted_exp = w * exp_z
-    # norm = torch.sum(weighted_exp)
-    # return weighted_exp / norm
 
-class HJ_MD_LS:
-    ''' 
-        Hamilton-Jacobi Moreau Adaptive Descent (HJ_MAD) is used to solve nonconvex minimization
-        problems via a zeroth-order sampling scheme.
-        
-        Inputs:
-          1)  f            = function to be minimized. Inputs have size (n_samples x n_features). Outputs have size n_samples
-          2)  x_true       = true global minimizer
-          3)  delta        = coefficient of viscous term in the HJ equation
-          4)  int_samples  = number of samples used to approximate expectation in heat equation solution
-          5)  x_true       = true global minimizer
-          6)  t_vec        = time vector containig [initial time, minimum time allowed, maximum time]
-          7)  max_iters    = max number of iterations
-          8)  tol          = stopping tolerance
-          9)  theta        = parameter used to update tk
-          10) beta         = exponential averaging term for gradient beta (beta multiplies history, 1-beta multiplies current grad)
-          11) eta_vec      = vector containing [eta_minus, eta_plus], where eta_minus < 1 and eta_plus > 1 (part of time update)
-          11) alpha        = step size. has to be in between (1-sqrt(eta_minus), 1+sqrt(eta_plus))
-          12) fixed_time   = boolean for using adaptive time
-          13) verbose      = boolean for printing
-          14) momentum     = For acceleration.
-          15) accelerated  = boolean for using Accelerated Gradient Descent
+class AdaptiveDeltaConfig:
+    """
+    Configuration for adaptive delta updates.
 
-        Outputs:
-          1) x_opt                    = optimal x_value approximation
-          2) fk_hist                  = function value history
-    '''
-    def __init__(self, f, f_numpy, f_name, x_true, delta=0.1, t = 1e2, int_samples=1000,int_samples_line=150, max_iters=5e4,
-                 tol=5e-2,rescale0=1e-1,saturate_tol=1e-9,integration_method="MC",distribution="Cauchy",delta_dampener=0.8,verbose=True,plot=False,beta=0.0):
+    Attributes:
+        delta_minus (float): Factor to decrease delta (default: 0.99).
+        delta_plus (float): Factor to increase delta (default: 1.01).
+        saturate_tol (float): Tolerance level for saturating updates (default: 1e-4).
+    """
+    def __init__(self, delta_minus: float = 0.99, delta_plus: float = 1.01, saturate_tol: float = 1e-4) -> None:
+        self.saturate_tol = saturate_tol
+        self.delta_minus = delta_minus
+        self.delta_plus = delta_plus
+
+
+class AdaptiveTimeConfig:
+    """
+    Configuration for adaptive time step updates.
+
+    Attributes:
+        t_min (float): Minimum allowable time step (default: 1e-2).
+        t_max (float): Maximum allowable time step (default: 1e2).
+        theta (float): parameter used to update tk (default: 0.9).
+        eta_plus (float): Factor to increase time step (default: 1.01).
+        eta_minus (float): Factor to decrease time step (default: 0.99).
+    """
+    def __init__(self, t_min: float = 1e-2, t_max: float = 1e2, theta: float = 0.9, eta_plus: float = 1.01, eta_minus: float = 0.99) -> None:
+        self.t_min = t_min
+        self.t_max = t_max
+        self.theta = theta
+        self.eta_plus = eta_plus
+        self.eta_minus = eta_minus
+
+
+class PlotConfig:
+    """
+    Configuration for plotting.
+
+    Attributes:
+        f_numpy (Callable): The numpy-compatible version of the function to be minimized.
+        f_name (str): The name of the function, used for labeling plots.
+    """
+    def __init__(self, f_numpy: Callable, f_name: str) -> None:
+        self.f_numpy = f_numpy
+        self.f_name = f_name
+
+    def plot_1d_prox(self, xk: float, prox_xk_old: float, prox_xk_new: float, tk: float, num_points=1000):
+        """
+        Plots the 1D descent for the current dimension.
+        """
+
+        tauk = 0
+        direction = (xk - prox_xk_old)/np.linalg.norm(xk - prox_xk_old)
+        n_features = xk.shape[0]
+
+        tau_old = np.dot(prox_xk_old - xk, direction.T)
+        tau_new = np.dot(prox_xk_new - xk, direction.T)
+        f_vals = []
+        h_vals = []
+
+        tau_vals = np.linspace(-40, 20, num_points)
+        # Create x_vals with shape (num_points, 2)
+        x_vals = np.zeros((num_points, n_features))
+
+        # Compute x_vals by adding tau * direction for each component of x0
+        for i in range(n_features):
+            x_vals[:, i] = xk[0,i] + tau_vals.T * direction[0,i]
+
+
+        for x in x_vals:
+            xk_varied = x
+            f_vals.append(self.f_numpy(xk_varied))
+            h_vals.append(self.f_numpy(xk_varied) + 1/(2*tk)*np.linalg.norm(xk_varied-xk)**2)
+
+        plt.figure()
+        plt.plot(tau_vals, f_vals, '-', color='black', label=f'f(x)')
+        plt.plot(tau_vals, h_vals, '-', color='blue', label=r'$f(x) + \frac{1}{2t_0} ||x - x_0||^2$')
+        plt.plot(tauk, self.f_numpy(xk[0,:]), '*', color='black', label=f'xk')
+        plt.plot(tau_old, self.f_numpy(prox_xk_old[0,:]), '*', color='green', label=f'Full Space')
+        plt.plot(tau_new, self.f_numpy(prox_xk_new[0,:]), '*', color='red', label=f'On Line')
+
+        plt.xlabel(f'Tau')
+        plt.ylabel('Function Value')
+        plt.title(f'1D Descent for Chosen Line')
+        plt.legend()
+        plt.show()
+
+
+class HJ_MAD_LS:
+    """
+    Hamilton-Jacobi Moreau Adaptive Descent with Line Search (HJ_MAD_LS).
+
+    This algorithm solves nonconvex minimization problems using a zeroth-order sampling approach 
+    and incorporates line search for step size optimization.
+
+    Attributes:
+        f (Callable): Function to be minimized, accepting inputs of shape (n_samples x n_features).
+        x_true (float): True global minimizer for comparison and validation.
+        delta (float): Coefficient for the viscous term in the Hamilton-Jacobi equation.
+        t (float): Initial time step for the optimization process.
+        int_samples (int): Number of samples used to approximate expectations.
+        max_iters (Union[int, float]): Maximum number of iterations (default: 5e4).
+        tol (float): Stopping tolerance (default: 5e-2).
+        adaptive_delta_config (Optional[AdaptiveDeltaConfig]): Configuration for adaptive delta updates.
+        adaptive_time_config (Optional[AdaptiveTimeConfig]): Configuration for adaptive time updates.
+        plot_config (Optional[PlotConfig]): Configuration for plotting function values.
+        integration_method (Literal["MC", "GH"]): Integration method, either Monte Carlo ("MC") or Gauss-Hermite ("GH").
+        distribution (Literal["Gaussian", "Cauchy"]): Sampling distribution, either Gaussian or Cauchy.
+        line_search (bool): Enables line search for step size optimization (default: True).
+        step_size (float): Initial step size (ignored if line search is enabled).
+        beta (float): Momentum factor for exponential averaging of gradients.
+        momentum (float): Additional momentum parameter for acceleration.
+        verbose (bool): Prints parameter information and updates if True.
+
+    Outputs:
+        x_opt (np.ndarray): Approximation of the optimal solution.
+        xk_hist (np.ndarray): History of solutions during optimization.
+        xk_error_hist (np.ndarray): History of errors during optimization.
+        fk_hist (list): History of function values during optimization.
+        deltak_hist (np.ndarray): History of delta values during optimization.
+        tk_hist (np.ndarray): History of time step values during optimization.
+        successful_ls_portion (float): Proportion of successful line search steps.
+    """
+    def __init__(
+        self,
+        f: Callable,
+        x_true: float,
+        delta: float = 0.1,
+        t: float = 1e2,
+        int_samples: int = 150,
+        max_iters: int = int(5e4),
+        tol: float = 5e-2,
+        adaptive_delta_config: Optional[AdaptiveDeltaConfig] = None,
+        adaptive_time_config: Optional[AdaptiveTimeConfig] = None, 
+        plot_config: Optional[PlotConfig] = None,
+        integration_method: Literal["MC", "GH"] = "MC",
+        distribution: Literal["Gaussian", "Cauchy"] = "Gaussian",
+        line_search: bool = True,
+        step_size: float = 0.1,
+        beta: float = 0.0,
+        momentum: float = 0.0,
+        verbose: bool = True,
+    ) -> None:
       
-        self.delta            = delta
-        self.f                = f
-        self.f_numpy          = f_numpy
-        self.f_name           = f_name
-        self.int_samples      = int_samples
-        self.int_samples_line = int_samples_line
-        self.max_iters        = max_iters
-        self.tol              = tol
-        self.t                = t
-        self.x_true           = x_true
-        self.verbose          = verbose
-        self.rescale0         = rescale0
-        self.saturate_tol     = saturate_tol
-        self.plot             = plot
+        # General configurations
+        self.f = f
+        self.x_true = x_true
+        self.delta = delta
+        self.t = t
+        self.verbose = verbose
+        self.max_iters = max_iters
+        self.tol = tol
         self.integration_method = integration_method
         self.distribution = distribution
-        self.delta_dampener =delta_dampener
+        self.int_samples = int_samples
         self.beta = beta
+        self.momentum = momentum
+        self.n_features = x_true.shape[0]
 
+        # Adaptive delta configurations
+        self.adaptive_delta = adaptive_delta_config is not None
+        if self.adaptive_delta:
+            self.delta_plus = adaptive_delta_config.delta_plus
+            self.delta_minus = adaptive_delta_config.delta_minus
+            self.saturate_tol = adaptive_delta_config.saturate_tol
 
-        self.n_features = x_true.shape[0] 
+        # Adaptive time configurations
+        self.adaptive_time = adaptive_time_config is not None
+        if self.adaptive_time:
+            self.t_min = adaptive_time_config.t_min
+            self.t_max = adaptive_time_config.t_max
+            self.theta = adaptive_time_config.theta
+            self.eta_plus = adaptive_time_config.eta_plus
+            self.eta_minus = adaptive_time_config.eta_minus
 
-        if self.verbose:
-            self.print_parameters()
+        # Validate step size for adaptive time
+        if self.adaptive_time:
+            assert 1 - np.sqrt(self.eta_minus) <= step_size <= 1 + np.sqrt(self.eta_plus)
+        self.step_size = step_size
 
-        if int_samples_line > 0:
-            # Generate Hermite Quadrature Points in R^1
-            z_line, weights_line = roots_hermite(int_samples_line)
+        # Line search configuration
+        self.line_search = line_search
+        if self.line_search:
+            z_line, weights_line = roots_hermite(self.int_samples)
             self.z_line = torch.tensor(z_line, dtype=torch.double)
             self.weights_line = torch.tensor(weights_line, dtype=torch.double)
-        
-        if integration_method == "GH":
+            self.step_size = 1.0
 
-            # Generate Hermite Quadrature Points in R^n
+        # Plotting configuration
+        self.plot_config = plot_config
+
+        # Gauss-Hermite grid for integration
+        if integration_method == "GH":
             self.weights, self.z, self.filtered_samples = self.generate_gh_grid_matrix_with_threshold()
 
-    def generate_gh_grid_matrix_with_threshold(self): #sample_fraction=0.01):
+
+    def generate_gh_grid_matrix_with_threshold(self):
         """
         Generates a column matrix for n-dimensional Gauss-Hermite quadrature
         and removes rows with weights below a threshold.
@@ -181,60 +294,7 @@ class HJ_MD_LS:
 
         return weight_products_tensor, grid_points_tensor, filtered_samples
     
-    def print_parameters(self):
-        # Collect parameters into a list of tuples for tabulation
-        def format_scientific(value):
-            return f"{value:.3e}" if isinstance(value, (int, float)) else value
-        
-        parameters = [
-            ("f_name", self.f_name),
-            ("Dimensions/Features", self.n_features),
-            ("delta", self.delta),
-            ("delta_dampener", self.delta_dampener),
-            ("t", format_scientific(self.t)),
-            ("int_samples", format_scientific(self.int_samples)),
-            ("int_samples_line", format_scientific(self.int_samples_line)),
-            ("max_iters", format_scientific(self.max_iters)),
-            ("tol", self.tol),
-            ("distribution", self.distribution),
-            ("rescale0", format_scientific(self.rescale0)),
-            ("saturate_tol", format_scientific(self.saturate_tol)),
-            ("beta", self.beta),
-        ]
-        
-        # Print the table
-        if self.verbose:
-            print(tabulate(parameters, headers=["Parameter", "Value"], tablefmt="pretty"))
-    
-    def h(self, tau, constants):
-       
-        direction, xk = constants
-
-        xk_expanded = xk.expand(self.int_samples_line, self.n_features)
-        direction_expanded = direction.expand(self.int_samples_line, self.n_features)
-
-        y = xk_expanded + tau * direction_expanded
-       
-        return self.f(y)
-    
-    def argmin_prox_line(self, tau_samples, constants):
-       
-        direction, xk = constants
-
-        xk_expanded = xk.expand(self.int_samples_line, self.n_features)
-        direction_expanded = direction.expand(self.int_samples_line, self.n_features)
-
-        y = xk_expanded + tau_samples * direction_expanded
-
-        prox_function = self.f(y) + 1/(2*self.t)*torch.norm(y-xk_expanded)**2
-
-        prox_index = torch.argmin(prox_function)
-
-        prox_tau = tau_samples[prox_index]
-       
-        return prox_tau
-    
-    def improve_prox_GH(self,xk, prox_xk, rescale_factor=1):
+    def improve_prox_with_line_search(self,xk, prox_xk,deltak,tk):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
             Corresponding to the Proximal Operator.
@@ -243,26 +303,25 @@ class HJ_MD_LS:
         direction = (xk - prox_xk)/torch.norm(xk - prox_xk)
         tau_xk = 0#-torch.norm(xk - prox_xk)
 
-        constants = direction, xk
-
-        t = self.t
-
-        delta = self.delta
+        xk_expanded = xk.expand(self.int_samples, self.n_features)
+        direction_expanded = direction.expand(self.int_samples, self.n_features)
 
         iterations=0
-
+        rescale_factor=1
         while True:
           # Apply Rescaling to time
-          t_rescaled = t/rescale_factor
+          t_rescaled = tk/rescale_factor
 
-          sigma = np.sqrt(2*delta*t_rescaled)
+          sigma = np.sqrt(2*deltak*t_rescaled)
 
           # Compute Function Values
           tau = tau_xk - self.z_line*sigma # Size (int_samples,1)
-          h_values = self.h(tau.view(-1, 1),constants)
+          z = xk_expanded + tau.view(-1, 1) * direction_expanded
+
+          f_values = self.f(z) 
 
           # Apply Rescaling to Exponent
-          rescaled_exponent = - rescale_factor*h_values/ self.delta
+          rescaled_exponent = - rescale_factor*f_values/ self.delta
 
           # Remove Max Exponent to prevent Overflow
           max_exponent = torch.max(rescaled_exponent)  # Find the maximum exponent
@@ -297,12 +356,12 @@ class HJ_MD_LS:
 
         prox_xk_new = xk + prox_tau*direction
 
-        if self.plot:
-            self.plot_1d_prox(xk.view(1, self.n_features).numpy(), prox_xk.numpy(), prox_xk_new.numpy(), t_rescaled)
+        if self.plot_config is not None:
+            self.plot_config.plot_1d_prox(xk.view(1, self.n_features).numpy(), prox_xk.numpy(), prox_xk_new.numpy(), t_rescaled)
         
         return prox_xk_new
 
-    def compute_directional_prox_GH(self,xk):
+    def compute_directional_prox_gauss_hermite(self,xk,deltak,tk):
         """
         Compute the prox of f using Gauss-Hermite Integration.
         
@@ -313,11 +372,8 @@ class HJ_MD_LS:
         Returns:
             prox (float): Computed prox.
         """
-        t     = self.t
-        delta = self.delta
 
-        rescale_factor = self.rescale0
-
+        rescale_factor = 1.0
         iterations = 0
 
         # Reshape xk to ensure broadcasting
@@ -334,17 +390,18 @@ class HJ_MD_LS:
 
         while True:
             # Apply Rescaling to time
-            t_rescaled = t/rescale_factor
+            t_rescaled = tk/rescale_factor
 
-            sigma = np.sqrt(2*delta*t_rescaled)
+            sigma = np.sqrt(2*deltak*t_rescaled)
 
             # Compute Perturbed Points
             y = xk_expanded - (sigma * self.z)
 
             # Compute Function Values
             f_values = self.f(y)  # Assume f supports batch processing, returns shape (int_samples,)
-            rescaled_exponent = -rescale_factor * f_values / delta
-            exp_term = torch.exp(rescaled_exponent)
+            rescaled_exponent = -rescale_factor * f_values / deltak
+            rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
+            exp_term = torch.exp(rescaled_exponent) 
 
             # print(f"{self.weights_line.shape=}")
             # print(f"{exp_term.shape=}")
@@ -366,85 +423,20 @@ class HJ_MD_LS:
                 iterations += 1
             else:
                 break
-        
-        # Increase intial rescale factor if it is too small to better utilize samples
-        # if iterations == 0:
-        #     rescale_factor = min(scale_plus*rescale_factor, max_rescale)
-        
-        self.rescale0 = rescale_factor
+    
 
         prox_xk = torch.matmul(w.t(), y)
         prox_xk = prox_xk.view(-1,1).t()
 
-        return prox_xk, rescale_factor
-    
-    def improve_prox_cauchy_argmin(self,xk, prox_xk):
-        '''
-            Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
-            Corresponding to the Proximal Operator.
-        '''
-        # Direction of line 1D.
-        direction = (xk - prox_xk)/torch.norm(xk - prox_xk)
-        tau_xk = 0
-
-        constants = direction, xk
-
-        # Adjust this parameter for heavier tails if needed
-        gamma = self.t*self.delta
-
-        # Generate Cauchy-distributed samples with location x_k and scale gamma
-        cauchy_dist = torch.distributions.Cauchy(loc=tau_xk, scale=gamma)
-        tau = cauchy_dist.sample((self.int_samples_line,)).view(-1, 1)
-
-        prox_tau = self.argmin_prox_line(tau,constants)
-
-        prox_xk_new = xk + prox_tau*direction
-        
-        return prox_xk_new
-    
-    def compute_directional_prox_argmin(self,xk):
-        '''
-            Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
-            Corresponding to the Proximal Operator.
-        '''
-        # Adjust this parameter for heavier tails if needed
-        gamma = self.t*self.delta
-
-        # Expand xk to match the shape of y for broadcasting
-        xk_expanded = xk.expand(self.int_samples, self.n_features)  # Shape: (self.int_samples, n_features)
-
-        # Generate Cauchy-distributed samples with location x_k and scale gamma
-        # Broadcasting ensures `loc=xk` (shape: (n_features,)) and `scale=gamma` (scalar)
-        print(f"{self.distribution=}")
-        if self.distribution == "Cauchy":
-            cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=gamma)
-
-            # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
-            y = cauchy_dist.sample((self.int_samples,)) 
-        else:
-            y = xk + np.sqrt(gamma)*torch.randn(self.int_samples, self.n_features)
-
-
-        # Compute the prox_function for each sample
-        # f(y) must return a tensor of shape (self.int_samples,)
-        prox_function = self.f(y)  + (1 / (2 * self.t)) * torch.norm(y - xk_expanded, dim=1)**2  # Shape: (self.int_samples,)
-
-        # Find the index of the minimum value in prox_function
-        prox_index = torch.argmin(prox_function) 
-
-        # Use the index to extract the corresponding y value
-        prox_xk = y[prox_index]#.unsqueeze(0)  # Shape: (1, n_features)
-
         return prox_xk
     
-    def compute_directional_prox_softmax(self,xk):
+    def compute_directional_prox(self,xk,deltak,tk):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
             Corresponding to the Proximal Operator.
         '''
         # Adjust this parameter for heavier tails if needed
-        delta = self.delta
-        t = self.t*delta
+
         rescale_factor = 1
         iterations = 0
 
@@ -453,9 +445,9 @@ class HJ_MD_LS:
 
         while True:
             # Apply Rescaling to time
-            t_rescaled = t/rescale_factor
+            t_rescaled = tk/rescale_factor
 
-            standard_deviation = np.sqrt(delta*t_rescaled)
+            standard_deviation = np.sqrt(deltak*t_rescaled)
 
             # Compute Perturbed Points
             if self.distribution == "Cauchy":
@@ -468,7 +460,7 @@ class HJ_MD_LS:
 
             # Compute Function Values
             f_values = self.f(y)  
-            rescaled_exponent = -rescale_factor * f_values / delta
+            rescaled_exponent = -rescale_factor * f_values / deltak
             rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
             exp_term = torch.exp(rescaled_exponent)
 
@@ -489,210 +481,164 @@ class HJ_MD_LS:
                 iterations += 1
             else:
                 break
-        
-        self.rescale0 = rescale_factor
 
         prox_xk = torch.matmul(w.t(), y)
         prox_xk = prox_xk.view(-1,1).t()
 
-        prox_function = self.f(y)  + (1 / (2 * self.t)) * torch.norm(y - xk_expanded, dim=1)**2  # Shape: (self.int_samples,)
-
-        # Find the index of the minimum value in prox_function
-        prox_index = torch.argmin(prox_function) 
-
-        # Use the index to extract the corresponding y value
-        print(f"Samples taken into account by softmax: {w[w>0.0].shape[0]}")
-        print(f"argmin f(y): {self.f(y[prox_index].expand(1, self.n_features)).item()}")
-        print(f"softmax f(y): {self.f(prox_xk).item()}")
-        print(f"f(xk): {self.f(xk.expand(1, self.n_features)).item()}")
-        print(f"delta: {delta}")
-
-        if self.f(prox_xk).item() > self.f(xk.expand(1, self.n_features)).item():
-            self.delta *= self.delta_dampener
-            print(f"Decreasing delta: {delta}")
-
         return prox_xk
-
     
-    def run(self, x0):
+    def update_time(self, tk, rel_grad_uk_norm):
+      '''
+        time step rule
+
+        if rel grad norm too small, increase tk (with maximum T).
+        else if rel grad norm is too "big", decrease tk with minimum (t_min)
+      '''
+
+      if rel_grad_uk_norm <= self.theta:
+        # Decrease t when relative gradient norm is smaller than theta
+        tk = max(self.eta_minus*tk, self.t_min)
+      else:
+        # Increas otherwise t when relative gradient norm is smaller than theta
+        tk = min(self.eta_plus*tk, self.t_max)
+
+      return tk
+
+    def run(self, x0: torch.Tensor):
         """
-        Runs the coordinate descent optimization process.
+        Runs the coordinate descent optimization process using the HJ-MAD-LS algorithm.
 
         Args:
-            x0 (torch.Tensor): Initial guess for the minimizer.
-            num_cycles (int): Number of cycles to run the coordinate descent.
+            x0 (torch.Tensor): Initial guess for the minimizer, with shape `(n_features,)`.
 
         Returns:
-            torch.Tensor: Optimal solution found by the coordinate descent.
-            list: History of solutions for each cycle.
-            list: History of the entire optimization process.
-            list: Error history for each cycle.
+            - torch.Tensor: xk - The optimal solution found by the optimization process, with shape `(n_features,)`.
+            - torch.Tensor: xk_hist - History of solutions for each iteration, with shape `(n_features, num_iterations)`.
+            - torch.Tensor: xk_error_hist - Error history for each iteration, with shape `(num_iterations,)`.
+            - torch.Tensor: fk_hist - Objective function values for each iteration, with shape `(num_iterations,)`.
+            - torch.Tensor: deltak_hist - History of delta values for each iteration, with shape `(num_iterations,)`.
+            - torch.Tensor: tk_hist - History of time parameter `t` for each iteration, with shape `(num_iterations,)`.
+            - float: successful_ls_portion - The proportion of iterations where line search improved the result.
+
         """
+
         # Initialize Variables
         xk = x0.clone()
+        xk_minus_1 = x0.clone()
+        tk = self.t
+        deltak = self.delta
 
         # Initialize History
-        xk_hist = torch.zeros(self.max_iters+1, self.n_features)
-        xk_error_hist = torch.zeros(self.max_iters+1)
+        self.n_features = x0.shape[0]
         fk_hist = torch.zeros(self.max_iters+1)
-        delta_hist = torch.zeros(self.max_iters+1)
-
-        f_k = self.f(xk.view(1, self.n_features))
-        f_k_old = f_k
-        error_k = torch.norm(xk - self.x_true)
- 
-        xk_hist[0, :] = xk
-        xk_error_hist[0] = error_k
-        fk_hist[0] = f_k
-        delta_hist[0] = self.delta
+        xk_hist = torch.zeros(self.n_features,self.max_iters+1)
+        deltak_hist = torch.zeros(self.max_iters+1)
+        xk_error_hist = torch.zeros(self.max_iters+1)
+        tk_hist = torch.zeros(self.max_iters+1)
+        fk = self.f(xk.view(1, self.n_features))
+        xk_hist[:,0] = xk
+        fk_hist[0] = fk
+        deltak_hist[0] = deltak
+        tk_hist[0] = tk
+        xk_error_hist[0] = torch.norm(xk - self.x_true)
 
         # Define Outputs
-        fmt = '[{:3d}]: fk = {:6.2e} | xk_err = {:6.2e} '
+        fmt = '[{:3d}]: fk = {:6.2e} | error = {:6.2e} | deltak = {:6.2e} | tk = {:6.2e}'
         if self.verbose:
-            print('-------------------------- RUNNING Algorithm ---------------------------')
+            print('-------------------------- RUNNING HJ-MAD-LS Algorithm ---------------------------')
             print('dimension = ', self.n_features, 'n_samples = ', self.int_samples)
-            print(fmt.format(0, fk_hist[0], xk_error_hist[0]))
-        
-        # Find Initial "Best Direction"
-        if self.integration_method == "GH":
-            prox_xk, rescale_factor  = self.compute_directional_prox_GH(xk)
-        if self.integration_method == "argmin":
-            prox_xk = self.compute_directional_prox_argmin(xk)
-        else:
-            prox_xk = self.compute_directional_prox_softmax(xk)
+            print(fmt.format(0,xk_error_hist[0], fk_hist[0], deltak, tk))
 
-        f_prox = self.f(prox_xk.view(1, self.n_features))
+        saturation_count = 0
+        successful_ls_portion=0
 
-        successful_ls_count = 0
         for k in range(self.max_iters):
-            # Stopping Criteria
-            if error_k < self.tol:
-                if self.verbose:
-                    print(f'HJ-MAD converged to tolerence {self.tol:6.2e}')
-                    opt_error = torch.norm(xk - self.x_true)
-                    print(f'iter = {k}, Error =  {opt_error:6.2e}')
-                break
-            # if k > 0:
-            #     relative_gradient_error = np.abs(np.abs(torch.norm(xk_hist[k])/torch.norm(xk_hist[k-1]))-1)
-            #     if relative_gradient_error < self.saturate_tol:
-            #         print('HJ-MAD converged due to error saturation')
-            #         print(f"Relative Gradient Error: {relative_gradient_error}")
-            #         print(f"saturate_tol: {self.saturate_tol}")
-            #         #self.distribution = "Normal"
-            #         self.t *= 1.2
-
-
-
-            # Find Proximal in 1D Along this Direction
-            if self.int_samples_line > 0:
-            #   if self.integration_method == "GH":
-              prox_xk_new = self.improve_prox_GH(xk,prox_xk, rescale_factor=1)
-            #   else:
-            #     prox_xk_new = self.improve_prox_cauchy_argmin(xk,prox_xk)
-              
-              # Compute Function Value at New Proximal Point
-              f_prox_new = self.f(prox_xk_new.view(1, self.n_features))
-
-            #   print(f"{f_prox=}")
-            #   print(f"Prox_xk error: {torch.norm(prox_xk - self.x_true):.2e}")
-              print(f"{f_prox_new=}")
-              print(f"Prox_xk_new error: {torch.norm(prox_xk_new - self.x_true):.2e}")
-            #   print(f"{f_k=}")
-            #   print(f"xk error: {torch.norm(xk - self.x_true):.2e}")
-
-              # The function value with the full space proximal operator
-              if f_prox_new < f_prox: # Update prox_xk if we have improvement
-                print(f"Improvement from line search.\nR^n Prox_xk error: {torch.norm(prox_xk - self.x_true):.2e}, Line Prox_xk error: {torch.norm(prox_xk_new - self.x_true):.2e}")#, f_k: {f_k:.2e}, f_old: {f_prox:.2e}")
-                successful_ls_count += 1
-                prox_xk = prox_xk_new
-                f_prox = f_prox_new
-              else: # Don't update prox_xk if we don't have improvement
-                print("No improvement in line search")
-                
-            if k == 0:
-                first_moment = prox_xk
-
-            # Only Update xk if we have improvement in function value
-            first_moment = self.beta*first_moment+(1-self.beta)*(xk-prox_xk)
-            xk = xk - first_moment
-            f_k = f_prox # Update function value
-            error_k = torch.norm(xk - self.x_true)
-
-            # if f_prox < f_k_old:
-            #     xk = prox_xk
-            #     f_k = f_prox # Update function value
-            #     error_k = torch.norm(xk - self.x_true)
-            # else:
-            #     f_k = f_k_old
-            #     print("No improvement in function value")
-
-            # Update History
-            xk_hist[k+1, :] = xk
-            xk_error_hist[k+1] = error_k
-            fk_hist[k+1] = f_k
-            delta_hist[k+1] = self.delta
-            f_k_old = f_k
-
-            if self.verbose:
-                print(fmt.format(k+1, fk_hist[k+1], xk_error_hist[k+1]))
-
-            
-            # Find Initial "Directional Prox in R^n"
-            # Find Initial "Best Direction"
+            # Compute Proximal Point
             if self.integration_method == "GH":
-                prox_xk, rescale_factor  = self.compute_directional_prox_GH(xk.view(1, self.n_features))
-            if self.integration_method == "argmin":
-                prox_xk = self.compute_directional_prox_argmin(xk)
+                prox_xk  = self.compute_directional_prox_gauss_hermite(xk,deltak,tk)
             else:
-                prox_xk = self.compute_directional_prox_softmax(xk)
+                prox_xk = self.compute_directional_prox(xk,deltak,tk)
+
             f_prox = self.f(prox_xk.view(1, self.n_features))
 
-
-        successful_ls_portion = successful_ls_count/(k)
-        return xk, xk_hist[:k+1,:], xk_error_hist[:k+1], fk_hist[:k+1], delta_hist[:k+1], successful_ls_portion
+            # Update Delta
+            if self.adaptive_delta:
+                # Dampen delta if the proximal point is worse than the current point
+                if f_prox >= fk: 
+                    if self.verbose:
+                        print(f"    f(xk): {fk.item():.5e} | f(prox): {f_prox.item():.5e}")
+                    deltak *= self.delta_minus
     
-    def plot_1d_prox(self, xk, prox_xk_old, prox_xk_new, tk, num_points=1000):
-        """
-        Plots the 1D descent for the current dimension.
+                # Prevent delta from becoming too small
+                elif saturation_count > 5: # Check for saturation
+                    saturation_count = 0
+                    relative_gradient_error = torch.abs(torch.abs(torch.norm(fk_hist[k] )/torch.norm(fk_hist[k-5] ))-1)
+                    if relative_gradient_error < self.saturate_tol:
+                        deltak *= self.delta_plus
+                        if self.verbose:
+                            print(f"    Delta increased to {deltak}")
+                saturation_count += 1
 
-        Args:
-            xk (torch.Tensor): Current position.
-            dim (int): The current dimension being optimized.
-            domain (tuple): The range over which to vary the current dimension.
-            num_points (int): Number of points to sample in the domain.
-        """
+            # Line Search
+            if self.line_search:
+                prox_xk_new = self.improve_prox_with_line_search(xk,prox_xk,deltak,tk)
+                f_prox_new = self.f(prox_xk_new.view(1, self.n_features)).item()
+                if f_prox_new < f_prox:
+                    prox_xk = prox_xk_new
+                    f_prox = f_prox_new
+                    successful_ls_portion += 1
+                    if self.verbose:
+                        print(f"    Improvement from line search | f(prox_ls): {f_prox_new:.5e}")
+                else:
+                    if self.verbose:
+                        print(f"    No improvement from line search | f(prox_ls): {f_prox_new:.5e}")
 
-        tauk = 0
-        direction = (xk - prox_xk_old)/np.linalg.norm(xk - prox_xk_old)
+            # Momentum (yk = xk if momentum = 0)
+            yk = xk + self.momentum * (xk - xk_minus_1)
+            xk_minus_1 = xk
 
-        tau_old = np.dot(prox_xk_old - xk, direction.T)
-        tau_new = np.dot(prox_xk_new - xk, direction.T)
-        f_vals = []
-        h_vals = []
+            # Update first moment (first_moment = (yk-prox_xk) if beta = 0)
+            if k == 0:
+                first_moment = prox_xk
+                
 
-        tau_vals = np.linspace(-40, 20, num_points)
-        # Create x_vals with shape (num_points, 2)
-        x_vals = np.zeros((num_points, self.n_features))
+            first_moment = self.beta*first_moment+(1-self.beta)*(yk-prox_xk)
 
-        # Compute x_vals by adding tau * direction for each component of x0
-        for i in range(self.n_features):
-            x_vals[:, i] = xk[0,i] + tau_vals.T * direction[0,i]
+            # Apply Gradient Descent
+            xk = yk - self.step_size*first_moment
+            fk = self.f(xk.view(1, self.n_features))
+            errork = torch.norm(xk - self.x_true)
+            
+            # Update time
+            if self.adaptive_time:
+                grad_norm = torch.norm(first_moment)
+                if k >0:
+                    rel_grad_norm = grad_norm/(grad_norm_old + 1e-12)
+                    tk = self.update_time(tk,rel_grad_norm)
+                grad_norm_old = grad_norm
 
+            # Print Iteration Information
+            if self.verbose:
+                print(fmt.format(k+1, fk.item(),errork, deltak, tk))
 
-        for x in x_vals:
-            xk_varied = x
-            f_vals.append(self.f_numpy(xk_varied))
-            h_vals.append(self.f_numpy(xk_varied) + 1/(2*tk)*np.linalg.norm(xk_varied-xk)**2)
+            # Update History
+            xk_hist[:,k+1] = xk
+            xk_error_hist[k+1] = errork.item()
+            fk_hist[k+1] = fk
+            deltak_hist[k+1] = deltak
+            tk_hist[k+1] = tk
 
-        plt.figure()
-        plt.plot(tau_vals, f_vals, '-', color='black', label=f'f(x)')
-        plt.plot(tau_vals, h_vals, '-', color='blue', label=r'$f(x) + \frac{1}{2t_0} ||x - x_0||^2$')
-        plt.plot(tauk, self.f_numpy(xk[0,:]), '*', color='black', label=f'xk')
-        plt.plot(tau_old, self.f_numpy(prox_xk_old[0,:]), '*', color='green', label=f'Full Space')
-        plt.plot(tau_new, self.f_numpy(prox_xk_new[0,:]), '*', color='red', label=f'On Line')
+            # Stopping Criteria
+            if errork < self.tol: # f value is less than tolerance
+                if self.verbose:
+                    print(f'    HJ-MAD converged to tolerence {self.tol:6.2e}')
+                    print(f'    iter = {k}: f_value =  {fk}')
+                break
 
-        plt.xlabel(f'Tau')
-        plt.ylabel('Function Value')
-        plt.title(f'1D Descent for Chosen Line')
-        plt.legend()
-        plt.show()
+        
+        if k == self.max_iters-1:
+            if self.verbose:
+                print(f"    HJ-MAD did not converge after {self.max_iters} iterations")
+    
+        return xk, xk_hist[:k+1,:], xk_error_hist[:k+1], fk_hist[:k+1], deltak_hist[:k+1], tk_hist[:k+1], successful_ls_portion/(k+1)
+

@@ -698,7 +698,7 @@ class HJ_MAD_CoordinateDescent_parallel(HJ_MAD):
         xk, xk_hist, tk_hist, xk_error_hist, rel_grad_uk_norm_hist, fk_hist = super().run(xk, cd=True, update_dim=dim)
         return xk, xk_hist, xk_error_hist, fk_hist
 
-    def run(self, x0, num_cycles=10):
+    def run(self, x0, num_cycles=10) -> Tuple[torch.Tensor, torch.Tensor, List, List, List]:
         """
         Runs the coordinate descent optimization process.
 
@@ -708,7 +708,9 @@ class HJ_MAD_CoordinateDescent_parallel(HJ_MAD):
 
         Returns:
             torch.Tensor: Optimal solution found by the coordinate descent.
+
             list: History of solutions for each cycle.
+            
             list: History of the entire optimization process.
             list: Error history for each cycle.
         """

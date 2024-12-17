@@ -186,10 +186,12 @@ class HJ_MAD_1D_NUMPY:
         if grad_uk_old is not None:
             grad_uk = self.beta*grad_uk_old + (1-self.beta)*grad_uk
 
-        uk_info = (grad_uk, uk, se_uk, y)
+        # if self.f(prox_xk) > self.f(x):
+        #     self.delta = self.delta* 0.95
+
 
         # Return Gradient at uk, uk, prox at xk and standard error in uk sample
-        return uk_info
+        return grad_uk, uk, se_uk, y
     
     def compute_grad_uk_trapezium(self, x: float, t: float, eps: float = 1e-12, grad_uk_old: Optional[float] = None) -> Tuple[float, float, float, np.ndarray]:
         ''' 

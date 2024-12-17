@@ -52,7 +52,7 @@ def Ackley(x):
 
   return f_val
 
-def Levy(x):
+def Levy(x):  
   n_features        = x.shape[1]
   n_samples         = x.shape[0]
   f_val             = torch.zeros(n_samples)

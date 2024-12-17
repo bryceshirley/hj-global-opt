@@ -34,3 +34,6 @@ def DiscontinuousFunc_numpy(x):
     # Global minima at x=2, gamma = 7
     return np.where(x < 2, 5 * np.sin(x) + 0.1 * x**2,  0.5*(x - 2)**2-20)#np.where(x < 2, np.abs(x**2/(x+1) + 80)+x**2,  0.5*(x - 2)**2+2)
 
+def Drop_Wave_1D(x):
+    """Compute the Drop Wave function in 1D."""
+    return -(1 + np.cos(12 * np.sqrt(x**2))) / (0.5 * x**2 + 2)

@@ -7,6 +7,8 @@ from scipy.special import roots_hermite
 from tabulate import tabulate
 
 import matplotlib.pyplot as plt
+
+from matplotlib import pyplot as plt
 from itertools import product
 
 seed   = 30
@@ -47,8 +49,8 @@ class HJ_MD_LS:
     def __init__(self, delta=100, t = 1e1, int_samples=1000, max_iters=1e4, f_tol = 1e-5,
                  distribution="Gaussian",beta=0.0, momentum=0.0,verbose=True,
                  line_search=True, stepsize=0.1, 
-                 adaptive_delta=True, adaptive_delta_params=[1e-2,0.9,1.2],
-                 adaptive_time=False, adaptive_time_params=[5e6,1e8,1.1,0.99,1.01]):
+                 adaptive_delta=True, adaptive_delta_params=[1e-2,0.9,1.1],#0.9 before
+                 adaptive_time=False, adaptive_time_params=[5e6,1e10,1.1,0.99,1.01]):
         
         
         # Algorithm Parameters
@@ -95,11 +97,14 @@ class HJ_MD_LS:
         # Output Parameters
         self.verbose          = verbose
     
+
+
     def improve_prox_with_line_search(self,xk, prox_xk,deltak,tk):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
             Corresponding to the Proximal Operator.
         '''
+
         # Direction of line 1D.
         direction = (xk - prox_xk)/torch.norm(xk - prox_xk)
         tau_xk = 0#-torch.norm(xk - prox_xk)
@@ -257,9 +262,11 @@ class HJ_MD_LS:
         # Initialize History
         self.n_features = x0.shape[1]
         fk_hist = torch.zeros(self.max_iters+1)
+        xk_hist = torch.zeros(self.n_features,self.max_iters+1)
         deltak_hist = torch.zeros(self.max_iters+1)
         tk_hist = torch.zeros(self.max_iters+1)
         fk = self.f(xk.view(1, self.n_features))
+        xk_hist[:,0] = xk
         fk_hist[0] = fk
         deltak_hist[0] = deltak
         tk_hist[0] = tk
@@ -272,7 +279,6 @@ class HJ_MD_LS:
             print(fmt.format(0, fk_hist[0], deltak, tk))
 
         saturation_count = 0
-        increase_sample = True
 
         for k in range(self.max_iters):
             # Compute Proximal Point
@@ -282,11 +288,10 @@ class HJ_MD_LS:
             # Update Delta
             if self.adaptive_delta:
                 # Dampen delta if the proximal point is worse than the current point
-                if f_prox >= 1.1*fk: #1.1*fk:
+                if f_prox >= 1.01*fk: #1.1*fk:
                     if self.verbose:
-                        print(f"    f(xk): {fk.item()} | f(prox): {f_prox.item()}")
+                        print(f"    f(xk): {fk.item():.5e} | f(prox): {f_prox.item():.5e}")
                     deltak *= self.delta_minus
-                    #tk *= self.t_minus
     
                 # Prevent delta from becoming too small
                 elif saturation_count > 5: # Check for saturation
@@ -294,13 +299,9 @@ class HJ_MD_LS:
                     relative_gradient_error = torch.abs(torch.abs(torch.norm(fk_hist[k] )/torch.norm(fk_hist[k-5] ))-1)
                     if relative_gradient_error < self.saturate_tol:
                         deltak *= self.delta_plus
-                        #tk *= self.t_plus
+                        if self.verbose:
+                            print(f"    Delta increased to {deltak}")
                 saturation_count += 1
-            
-            if fk < 1e-3 and increase_sample:
-                self.int_samples *= 2
-                tk *= 10
-                increase_sample = False
 
             # Line Search
             if self.line_search:
@@ -310,10 +311,10 @@ class HJ_MD_LS:
                     prox_xk = prox_xk_new
                     f_prox = f_prox_new
                     if self.verbose:
-                        print(f"    Improvement from line search | f(prox_ls): {f_prox_new}")
+                        print(f"    Improvement from line search | f(prox_ls): {f_prox_new:.5e}")
                 else:
                     if self.verbose:
-                        print(f"    No improvement from line search | f(prox_ls): {f_prox_new}")
+                        print(f"    No improvement from line search | f(prox_ls): {f_prox_new:.5e}")
 
             # Momentum (yk = xk if momentum = 0)
             yk = xk + self.momentum * (xk - xk_minus_1)
@@ -343,6 +344,7 @@ class HJ_MD_LS:
                 print(fmt.format(k+1, fk.item(), deltak, tk))
 
             # Update History
+            xk_hist[:,k+1] = xk
             fk_hist[k+1] = fk
             deltak_hist[k+1] = deltak
             tk_hist[k+1] = tk
@@ -353,9 +355,11 @@ class HJ_MD_LS:
                     print(f'    HJ-MAD converged to tolerence {self.f_tol:6.2e}')
                     print(f'    iter = {k}: f_value =  {fk}')
                 break
+
         
         if k == self.max_iters-1:
             if self.verbose:
                 print(f"    HJ-MAD did not converge after {self.max_iters} iterations")
     
-        return xk, fk, fk_hist[0:k+1], deltak_hist[0:k+1],tk_hist[0:k+1], k+1
+        return xk, fk,xk_hist[:,0:k+1], fk_hist[0:k+1], deltak_hist[0:k+1],tk_hist[0:k+1], k+1
+

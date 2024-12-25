@@ -9,7 +9,7 @@ from scipy.optimize import differential_evolution
 from scipy.special import roots_hermite
 from IPython.display import clear_output
 
-from Interative_1D_solvers.test_functions1D import (DiscontinuousFunc_numpy,
+from test_functions1D import (DiscontinuousFunc_numpy,
                               MultiMinimaAbsFunc_numpy, MultiMinimaFunc_numpy,
                               Sin_numpy, Sinc_numpy)
 
@@ -396,17 +396,17 @@ class HJMoreauAdaptiveDescentVisualizer:
                 y = np.random.laplace(loc=x_k, scale=b, size=int_samples)
             elif self.distribution == "Cauchy":
                 # Adjust this parameter for heavier tails if needed
-                gamma = t*delta/rescale
+                gamma = t/rescale
 
                 # Generate Cauchy-distributed samples with location x_k and scale gamma
                 y = x_k + gamma * np.random.standard_cauchy(size=int_samples)
             else:
-                standard_dev = np.sqrt(t*delta/rescale)
+                standard_dev = 2*np.sqrt(t/rescale)
 
                 # Generate Gaussian-distributed samples with mean x_k and standard deviation
                 y =  standard_dev * np.random.randn(int_samples) + x_k
 
-            exponent = -rescale*(self.selected_function(y))/delta 
+            exponent = -rescale*(self.selected_function(y))/delta - (x_k - y)**2 / (2 * delta * t)
             maxscaled_exponent = exponent - np.max(exponent)
             
             exp_term = np.exp(maxscaled_exponent)
@@ -450,6 +450,67 @@ class HJMoreauAdaptiveDescentVisualizer:
         #uk = - delta * np.log(np.mean(np.exp(exponent))+ 1e-200)
 
         return prox_k, grad_k, uk, line_search_iterations, y
+    
+    
+    def hj_compute_prox_and_grad_trap(self, x_k_input=None,t=None):
+        ''' 
+        Compute the gradient of the Moreau envelope using the trapezium rule.
+
+        Args:
+            x (float): Input point for evaluating the gradient.
+            t (float): Scaling factor for smoothing (typically 'tk').
+            eps (float, optional): Small constant for numerical stability. Default is 1e-14.
+            old_grad_uk (Optional[float], optional): Previous gradient for momentum updates. Default is None.
+
+        Returns:
+            Tuple[float, float, np.ndarray]: 
+                - grad_uk: Gradient of the Moreau envelope.
+                - uk: Moreau envelope estimate.
+                - y: Discretized points used in trapezium rule.
+        '''
+        if t is None:
+            t = self.fixed_T_input.value
+
+        delta = self.delta_input.value
+        f = self.selected_function
+        N = int(self.int_samples_input.value)
+
+        if x_k_input is None:
+            x_k = self.x_k
+        else:
+            x_k = x_k_input
+        
+        # Discretize the domain for trapezium rule
+        a, b = x_k - 20 * np.sqrt(delta * t), x_k + 20 * np.sqrt(delta * t)  # Define an interval around x (5 standard deviations)
+        y = np.linspace(a, b, N)
+        width = (b - a) / (N - 1)
+
+        # Remove max exponent to avoid overflow
+        exponent = -f(y) / delta - (x_k - y)**2 / (2 * delta * t)
+        exponent = exponent - np.max(exponent)
+
+        # Calculate v_delta using the trapezium rule
+        discrete_integrand_v_delta = np.exp(exponent)
+        v_delta = (width / 2) * (discrete_integrand_v_delta[0] + 2 * np.sum(discrete_integrand_v_delta[1:N-1]) + discrete_integrand_v_delta[-1])
+        
+        # Calculate ∇v_delta using the trapezium rule
+        discrete_integrand_grad_v_delta = y *discrete_integrand_v_delta
+        grad_v_delta = (width / 2) * (discrete_integrand_grad_v_delta[0] + 2 * np.sum(discrete_integrand_grad_v_delta[1:N-1]) + discrete_integrand_grad_v_delta[-1])
+        
+        # Compute ∇u_delta using the simplified formula: -(grad_v_delta / v_delta)
+        prox_k = grad_v_delta / (v_delta)
+
+        # Compute prox_xk
+        grad_k = (x_k - prox_k)
+
+        # Compute estimated uk
+        h_parameters = (self.selected_function, t, x_k)
+        uk = h(prox_k, h_parameters)
+
+        lineseach_iterations = 0
+
+        # Return Gradient at uk, uk, prox at xk and standard error in uk sample
+        return prox_k, grad_k, uk,lineseach_iterations, y
 
     def hj_compute_prox_and_grad_MC(self, x_k,t=None):
         """
@@ -572,7 +633,8 @@ class HJMoreauAdaptiveDescentVisualizer:
             method = self.integration_method
 
         if method == "HJ_MC":
-            prox_k, grad_k, _, _, _ = self.hj_compute_prox_and_grad_MC(x_k)
+            #prox_k, grad_k, _, _, _ = self.hj_compute_prox_and_grad_MC(x_k)
+            prox_k, grad_k, _,_,_ = self.hj_compute_prox_and_grad_trap(x_k)
         elif method == "HJ_GH":
             prox_k, grad_k, _, _, _ = self.hj_compute_prox_and_grad_GH(x_k)
         elif method == "scipy":
@@ -709,7 +771,7 @@ class HJMoreauAdaptiveDescentVisualizer:
             avg_line_search_iterations = 0
 
             for xk in self.x_values:
-                _, _, uk, line_search_iterations, _ = self.hj_compute_prox_and_grad_MC(xk,t=t)
+                _, _, uk, line_search_iterations, _ = self.hj_compute_prox_and_grad_trap(xk,t=t)
                 avg_line_search_iterations += line_search_iterations
                 self.u_values.append(uk)
             avg_line_search_iterations /= len(self.x_values)
@@ -773,7 +835,7 @@ class HJMoreauAdaptiveDescentVisualizer:
         if self.integration_method == "HJ_GH":
             x_hat, _, _, _, samples  = self.hj_compute_prox_and_grad_GH(self.x_k)
         elif self.integration_method == "HJ_MC":
-            x_hat, _, _, _, samples  = self.hj_compute_prox_and_grad_MC(self.x_k)
+            x_hat, _, _, _, samples  = self.hj_compute_prox_and_grad_trap(self.x_k)
         elif self.integration_method == "softmax_prox_MC":    
             x_hat, _, _, _, samples  = self.softmax_prox_MC(self.x_k)
         elif self.integration_method == "argmin_prox_MC":    

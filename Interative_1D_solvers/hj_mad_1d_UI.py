@@ -10,7 +10,7 @@ from IPython.display import Image, clear_output, display
 from ipywidgets import (HTML, Button, Checkbox, Dropdown, FloatSlider,
                         FloatText, HBox, Output, VBox)
 
-from Interative_1D_solvers.test_functions1D import (DiscontinuousFunc_numpy,
+from test_functions1D import (DiscontinuousFunc_numpy,
                               MultiMinimaAbsFunc_numpy, MultiMinimaFunc_numpy,
                               Sin_numpy, Sinc_numpy,Drop_Wave_1D)
 

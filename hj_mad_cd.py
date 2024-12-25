@@ -121,7 +121,7 @@ class HJ_MD_CD:
           f_values = self.f(z) # Size (int_samples,1)
 
           # Apply Rescaling to Exponent
-          rescaled_exponent = - rescale_factor*f_values/ deltak
+          rescaled_exponent = rescale_factor*(-f_values/ deltak)   # shape =  n_samples
 
           # Remove Max Exponent to prevent Overflow
           shifted_exponent = rescaled_exponent - torch.max(rescaled_exponent)

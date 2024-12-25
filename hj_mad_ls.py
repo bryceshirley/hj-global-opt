@@ -127,7 +127,7 @@ class HJ_MD_LS:
           f_values = self.f(y) # Size (int_samples,1)
 
           # Apply Rescaling to Exponent
-          rescaled_exponent = - rescale_factor*f_values/ deltak
+          rescaled_exponent = - rescale_factor*f_values/ deltak 
 
           # Remove Max Exponent to prevent Overflow
           shifted_exponent = rescaled_exponent - torch.max(rescaled_exponent)
@@ -180,7 +180,7 @@ class HJ_MD_LS:
 
             # Compute Perturbed Points
             if self.distribution == "Cauchy":
-                cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=standard_deviation)
+                cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=t_rescaled)
 
                 # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
                 y = cauchy_dist.sample((self.int_samples,))
@@ -189,7 +189,7 @@ class HJ_MD_LS:
 
             # Compute Function Values
             f_values = self.f(y)  
-            rescaled_exponent = -rescale_factor * f_values / deltak
+            rescaled_exponent = -rescale_factor * f_values / deltak - torch.norm(xk_expanded - y, p=2, dim=1)**2 / (2 * deltak * t_rescaled)
             rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
             exp_term = torch.exp(rescaled_exponent)
 

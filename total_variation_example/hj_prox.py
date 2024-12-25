@@ -155,13 +155,19 @@ def HJ_prox(x, f=tv_norm, t=1e-1, delta=1e-1, int_samples=100, alpha=1.0, linese
 
     
     linesearch_iters +=1
-    standard_dev = np.sqrt(delta * t / alpha)
+    standard_dev = 5*np.sqrt(t / alpha)
+    #standard_dev = 2*t
     dim = x.shape[0]
     print(x.shape)
     
-    y = standard_dev * torch.randn(int_samples, dim, device=device) + x.permute(1,0) # y has shape (n_samples, dim)
-    #y = standard_dev * torch.distributions.Cauchy(x.squeeze(), standard_dev**2).sample((int_samples,)).to(device) 
-    z = -f(y)*(alpha/delta)     # shape =  n_samples
+    #y = standard_dev * torch.randn(int_samples, dim, device=device) + x.permute(1,0) # y has shape (n_samples, dim)
+    #y = standard_dev * torch.distributions.Cauchy(x.squeeze(), standard_dev).sample((int_samples,)).to(device) 
+    uniform_samples = (torch.rand(int_samples, dim, device=device) * 2 - 1) * standard_dev
+
+    # Shift and scale the result
+    y = uniform_samples + x.permute(1, 0)
+    z = -f(y)*(alpha/delta) - torch.norm(x.view(1,-1) - y, p=2, dim=1)**2 / (2 * delta * t/alpha)    # shape =  n_samples
+    z = z - torch.max(z)
     w = torch.softmax(z, dim=0) # shape = n_samples 
     
     softmax_overflow = 1.0 - (w < np.inf).prod()

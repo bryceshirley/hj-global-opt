@@ -30,7 +30,7 @@ data_tensor = astronaut_tensor + noise_level * torch.randn_like(astronaut_tensor
 data_tensor = data_tensor.to(device)
 
 # Initialise regularisation parameter and operator
-reg_param = 0.13
+reg_param = 0.5
 G = Finite_Difference_Gradient_2D()
 
 # Initialise PDHG proximal maps and step sizes

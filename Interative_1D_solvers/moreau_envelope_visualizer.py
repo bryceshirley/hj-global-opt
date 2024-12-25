@@ -375,7 +375,6 @@ class HJMoreauAdaptiveDescentVisualizer:
             t = self.fixed_T_input.value
 
         delta = self.delta_input.value
-        rescale = self.rescale0_input.value
         int_samples = int(self.int_samples_input.value)
         spread = self.spread_input.value
 
@@ -385,42 +384,33 @@ class HJMoreauAdaptiveDescentVisualizer:
             x_k = x_k_input
 
         line_search_iterations=0
-
-        while True:
-            
-            if self.distribution == "Laplace":
-                #Laplace distribution scale parameter b, related to fixed_T
-                b = t*delta/rescale
-
-                # Generate Laplace-distributed samples with mean x_k and scale b
-                y = np.random.laplace(loc=x_k, scale=b, size=int_samples)
-            elif self.distribution == "Cauchy":
-                # Adjust this parameter for heavier tails if needed
-                gamma = t/rescale
-
-                # Generate Cauchy-distributed samples with location x_k and scale gamma
-                y = x_k + gamma * np.random.standard_cauchy(size=int_samples)
-            else:
-                standard_dev = 2*np.sqrt(t/rescale)
-
-                # Generate Gaussian-distributed samples with mean x_k and standard deviation
-                y =  standard_dev * np.random.randn(int_samples) + x_k
-
-            exponent = -rescale*(self.selected_function(y))/delta - (x_k - y)**2 / (2 * delta * t)
-            maxscaled_exponent = exponent - np.max(exponent)
-            
-            exp_term = np.exp(maxscaled_exponent)
-            
-            w = exp_term / np.sum(exp_term)
         
-            softmax_overflow = 1.0 - (w < np.inf).prod()
-            if softmax_overflow:
-                rescale /= 2
-                line_search_iterations +=1
-            else:
-                break
+        if self.distribution == "Laplace":
+            #Laplace distribution scale parameter b, related to fixed_T
+            b = t
 
-         # Compute Numerator and average over the samples
+            # Generate Laplace-distributed samples with mean x_k and scale b
+            y = np.random.laplace(loc=x_k, scale=b, size=int_samples)
+        elif self.distribution == "Cauchy":
+            # Adjust this parameter for heavier tails if needed
+            gamma = t
+
+            # Generate Cauchy-distributed samples with location x_k and scale gamma
+            y = x_k + gamma * np.random.standard_cauchy(size=int_samples)
+        else:
+            standard_dev = np.sqrt(spread*delta*t)
+
+            # Generate Gaussian-distributed samples with mean x_k and standard deviation
+            y =  standard_dev * np.random.randn(int_samples) + x_k
+
+        exponent = -(1/delta)*((self.selected_function(y))) #+ (1-delta/spread)*(x_k - y)**2 / (2 * t))
+        maxscaled_exponent = exponent - np.max(exponent)
+        
+        exp_term = np.exp(maxscaled_exponent)
+        
+        w = exp_term / np.sum(exp_term)
+        
+        # Compute Numerator and average over the samples
         prox_k = np.dot(w, y)
 
         # Compute Gradient at uk (times tk)

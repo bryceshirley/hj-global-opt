@@ -154,10 +154,11 @@ class HJ_MAD_LS:
         integration_method: Literal["MC", "GH"] = "MC",
         distribution: Literal["Gaussian", "Cauchy"] = "Gaussian",
         line_search: bool = True,
-        step_size: float = 0.1,
+        step_size: float = 1.0,
         beta: float = 0.0,
         momentum: float = 0.0,
         verbose: bool = True,
+        eps0: float = 0.1
     ) -> None:
       
         # General configurations
@@ -174,6 +175,7 @@ class HJ_MAD_LS:
         self.beta = beta
         self.momentum = momentum
         self.n_features = x_true.shape[0]
+        self.eps0 = eps0
 
         # Adaptive delta configurations
         self.adaptive_delta = adaptive_delta_config is not None
@@ -210,6 +212,7 @@ class HJ_MAD_LS:
         # Gauss-Hermite grid for integration
         if integration_method == "GH":
             self.weights, self.z, self.filtered_samples = self.generate_gh_grid_matrix_with_threshold()
+
 
 
     def generate_gh_grid_matrix_with_threshold(self):
@@ -306,22 +309,28 @@ class HJ_MAD_LS:
         xk_expanded = xk.expand(self.int_samples, self.n_features)
         direction_expanded = direction.expand(self.int_samples, self.n_features)
 
+        if self.adaptive_delta:
+            eps = -(1-deltak)
+        else:
+            eps = self.eps0
+
+
         iterations=0
         rescale_factor=1
         while True:
           # Apply Rescaling to time
           t_rescaled = tk/rescale_factor
 
-          sigma = np.sqrt(2*deltak*t_rescaled)
+          sigma = np.sqrt(2*t_rescaled*(1+eps))
 
           # Compute Function Values
           tau = tau_xk - self.z_line*sigma # Size (int_samples,1)
           z = xk_expanded + tau.view(-1, 1) * direction_expanded
 
-          f_values = self.f(z) 
+          f_values = self.f(z) + (1/(2*t_rescaled))*(eps+(1-deltak))*(torch.norm(z, p=2, dim=1)**2) 
 
           # Apply Rescaling to Exponent
-          rescaled_exponent = - rescale_factor*f_values/ self.delta
+          rescaled_exponent = - rescale_factor*f_values/ deltak
 
           # Remove Max Exponent to prevent Overflow
           max_exponent = torch.max(rescaled_exponent)  # Find the maximum exponent
@@ -430,6 +439,73 @@ class HJ_MAD_LS:
 
         return prox_xk
     
+    # def compute_directional_prox(self,xk,deltak,tk):
+    #     '''
+    #         Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
+    #         Corresponding to the Proximal Operator.
+    #     '''
+    #     # Adjust this parameter for heavier tails if needed
+
+    #     rescale_factor = 1
+    #     iterations = 0
+
+    #     xk = xk.squeeze(0)  # Remove unnecessary dimensions
+    #     xk_expanded = xk.expand(self.int_samples, self.n_features) 
+
+    #     while True:
+    #         # Apply Rescaling to time
+    #         t_rescaled = tk/rescale_factor
+
+    #         standard_deviation = np.sqrt(deltak*t_rescaled)
+
+    #         # Compute Perturbed Points
+    #         if self.distribution == "Cauchy":
+    #             cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=standard_deviation)
+
+    #             # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
+    #             y = cauchy_dist.sample((self.int_samples,))
+    #         else:
+    #             y = xk_expanded + standard_deviation*torch.randn(self.int_samples, self.n_features)
+
+    #         # Compute Function Values
+    #         f_values = self.f(y)  
+    #         rescaled_exponent = -rescale_factor * f_values / deltak
+    #         rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
+    #         exp_term = torch.exp(rescaled_exponent)
+
+    #         # Compute weights_line
+    #         denominator = torch.sum(exp_term)  # Scalar
+    #         w = torch.where(
+    #             denominator != 0,
+    #             exp_term / denominator,
+    #             np.inf,#torch.full_like(self.weights, float("inf")),
+    #         )
+
+    #         # Check for Overflow
+    #         softmax_overflow = 1.0 - (w < np.inf).prod()
+
+    #         if softmax_overflow and rescale_factor > 1e-200:
+    #             # Adjust rescale factor and increment iteration count
+    #             rescale_factor /= 2
+    #             iterations += 1
+    #         else:
+    #             break
+
+    #     prox_xk = torch.matmul(w.t(), y)
+    #     prox_xk = prox_xk.view(-1,1).t()
+          
+    #     l2_norm_squared = torch.norm(xk - prox_xk, p=2, dim=1)**2
+
+    #     f_prox_xk = self.f(prox_xk.view(1, self.n_features))
+
+    #     f_regularized_prox = self.f(prox_xk.view(1, self.n_features)) + (l2_norm_squared/ (2 * tk))
+
+    #     print(f"    {f_regularized_prox.item()=},{f_prox_xk.item()=}")
+    #     print(f"    {torch.max(w).item()=}")
+
+
+    #     return prox_xk
+    
     def compute_directional_prox(self,xk,deltak,tk):
         '''
             Rescale the Exponent For Under/OverFlow and find the line parameter Tau 
@@ -437,50 +513,51 @@ class HJ_MAD_LS:
         '''
         # Adjust this parameter for heavier tails if needed
 
-        rescale_factor = 1
-        iterations = 0
-
         xk = xk.squeeze(0)  # Remove unnecessary dimensions
         xk_expanded = xk.expand(self.int_samples, self.n_features) 
 
-        while True:
-            # Apply Rescaling to time
-            t_rescaled = tk/rescale_factor
-
-            standard_deviation = np.sqrt(deltak*t_rescaled)
-
-            # Compute Perturbed Points
+        if self.adaptive_delta or self.adaptive_time:
             if self.distribution == "Cauchy":
-                cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=standard_deviation)
-
-                # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
-                y = cauchy_dist.sample((self.int_samples,))
+                eps = np.sqrt(2*deltak/tk)-1
             else:
-                y = xk_expanded + standard_deviation*torch.randn(self.int_samples, self.n_features)
+                eps = deltak - 1
+        else:
+            eps = self.eps0
 
-            # Compute Function Values
-            f_values = self.f(y)  
-            rescaled_exponent = -rescale_factor * f_values / deltak
-            rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
-            exp_term = torch.exp(rescaled_exponent)
+        # Compute Perturbed Points
+        if self.distribution == "Cauchy":
+            scale = tk*(1+eps)
 
-            # Compute weights_line
-            denominator = torch.sum(exp_term)  # Scalar
-            w = torch.where(
-                denominator != 0,
-                exp_term / denominator,
-                np.inf,#torch.full_like(self.weights, float("inf")),
-            )
+            cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=scale)
 
-            # Check for Overflow
-            softmax_overflow = 1.0 - (w < np.inf).prod()
+            # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
+            y = cauchy_dist.sample((self.int_samples,))
 
-            if softmax_overflow and rescale_factor > 1e-200:
-                # Adjust rescale factor and increment iteration count
-                rescale_factor /= 2
-                iterations += 1
-            else:
-                break
+            l2_norm_squared = torch.norm(xk_expanded - y, p=2, dim=1)**2
+
+            exponent = -(1/deltak)*(self.f(y) + (l2_norm_squared/ (2 * tk)) - deltak*torch.log((l2_norm_squared/(scale**2)) + 1))
+            rescaled_exponent = exponent - torch.max(exponent)
+        else:
+            standard_deviation = np.sqrt(tk*(1+eps))
+
+            y = xk_expanded + standard_deviation*torch.randn(self.int_samples, self.n_features)
+
+            l2_norm_squared = torch.norm(xk_expanded - y, p=2, dim=1)**2
+
+            exponent = -(1/deltak)*((self.f(y)) + (1-deltak/(1+eps))*l2_norm_squared/ (2 * tk))
+
+        # Compute Function Values
+        rescaled_exponent = exponent - torch.max(exponent)
+        exp_term = torch.exp(rescaled_exponent)
+
+        # Compute weights_line
+        denominator = torch.sum(exp_term)  # Scalar
+        w = torch.where(
+            denominator != 0,
+            exp_term / denominator,
+            np.inf,#torch.full_like(self.weights, float("inf")),
+        )
+
 
         prox_xk = torch.matmul(w.t(), y)
         prox_xk = prox_xk.view(-1,1).t()
@@ -640,5 +717,5 @@ class HJ_MAD_LS:
             if self.verbose:
                 print(f"    HJ-MAD did not converge after {self.max_iters} iterations")
     
-        return xk, xk_hist[:k+1,:], xk_error_hist[:k+1], fk_hist[:k+1], deltak_hist[:k+1], tk_hist[:k+1], successful_ls_portion/(k+1)
+        return xk, xk_hist[:k+2,:], xk_error_hist[:k+2], fk_hist[:k+2], deltak_hist[:k+2], tk_hist[:k+2], successful_ls_portion/(k+2)
 

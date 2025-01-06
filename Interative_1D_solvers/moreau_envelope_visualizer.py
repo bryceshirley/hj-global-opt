@@ -376,18 +376,18 @@ class HJMoreauAdaptiveDescentVisualizer:
             #     y = np.random.laplace(loc=x_k, scale=(t*eps_step), size=int_samples)
             #     exponent = -(1/delta)*((self.selected_function(y)) + (1/ (2 * t))*(x_k - y)**2 +(delta/(t*eps_step))*np.abs(x_k-y))
             if self.distribution == "Cauchy":
-                scale = t*(1+eps)
+                scale = np.sqrt(t*(1+eps))
 
                 # Generate Cauchy-distributed samples with location x_k and scale gamma
                 y = x_k + scale * np.random.standard_cauchy(size=int_samples)
-                exponent = -(1/delta)*((self.selected_function(y)) + (((x_k - y)**2) / (2 * t)) - delta*np.log(((x_k-y)**2) + scale**2))
+                exponent = -(1/delta)*((self.selected_function(y)) + (((x_k - y)**2) / (2 * t)) - delta*np.log(((x_k-y)**2)/(scale**2) + 1))
                 
             else:
                 standard_dev = np.sqrt(t*(1+eps))
 
                 # Generate Gaussian-distributed samples with mean x_k and standard deviation
                 y =  standard_dev * np.random.randn(int_samples) + x_k
-                exponent = -(1/delta)*((self.selected_function(y)) + (1-delta/eps_step)*(x_k - y)**2 / (2 * t))
+                exponent = -(1/delta)*((self.selected_function(y)) + (1-delta/eps)*(x_k - y)**2 / (2 * t))
 
 
             maxscaled_exponent = exponent - np.max(exponent)
@@ -413,13 +413,13 @@ class HJMoreauAdaptiveDescentVisualizer:
                 prox_k_old = prox_k
 
             if h_prox < h_prox_best:
-                h_prox_best = h(prox_k, h_parameters)
+                h_prox_best = h_prox
                 prox_k_best = prox_k
                 y_best = y
                 grad_k_best = (x_k - prox_k)
 
 
-            eps += eps_step
+            eps += 0 #Eps Step
 
         return prox_k_best, grad_k_best, h_prox_best, line_search_iterations, y_best
     
@@ -822,7 +822,8 @@ class HJMoreauAdaptiveDescentVisualizer:
         f_hat = h(x_hat, hk_parameters)
 
         f_values = self.selected_function(self.x_values)
-        h_values = h(self.x_values, hk_parameters)
+        h_values2 = h(self.x_values, hk_parameters) - self.delta_input.value *np.log((self.x_k-self.x_values)**2/(1e-15*self.delta_input.value/fixed_T) +1) 
+        h_values = h(self.x_values, hk_parameters) 
 
         # Compute next iteration
         x_k_plus_1 = self.x_k- step_size * (self.x_k- x_hat)
@@ -837,6 +838,7 @@ class HJMoreauAdaptiveDescentVisualizer:
         # Plotting f(x)
         plt.plot(self.x_values, f_values, label=r'$f(x)$', color='black')
         plt.plot(self.x_values, h_values, label=r'Function to minimize at $x_k$, $f(z) + \frac{1}{2t} ||z - x_k||^2$', color='orange')
+        plt.plot(self.x_values, h_values2, label=r'$f(z) + R(z)$', color='pink')
 
         # Plot Moreau Envelope u(x)
         self.update_moreau_envelope()

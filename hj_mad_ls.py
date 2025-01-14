@@ -3,6 +3,7 @@ import numpy as np
 import torch
 
 from scipy.special import roots_hermite
+from torch.distributions.studentT import StudentT
 
 from tabulate import tabulate
 
@@ -48,9 +49,9 @@ class HJ_MD_LS:
     '''
     def __init__(self, delta=100, t = 1e1, int_samples=1000, max_iters=1e4, f_tol = 1e-5,
                  distribution="Gaussian",beta=0.0, momentum=0.0,verbose=True,
-                 line_search=True, stepsize=0.1, 
+                 line_search=True, stepsize=1.0, cooling=0.99,
                  adaptive_delta=True, adaptive_delta_params=[1e-2,0.9,1.1],#0.9 before
-                 adaptive_time=False, adaptive_time_params=[5e6,1e10,1.1,0.99,1.01]):
+                 adaptive_time=False, adaptive_time_params=[5e-5,1e5,1.1,0.99,1.01], dof=2.0):
         
         
         # Algorithm Parameters
@@ -94,6 +95,9 @@ class HJ_MD_LS:
         self.beta = beta
         self.momentum = momentum
 
+        self.dof = dof
+        self.cooling = cooling
+
         # Output Parameters
         self.verbose          = verbose
     
@@ -113,43 +117,43 @@ class HJ_MD_LS:
         direction_expanded = direction.expand(self.int_samples, self.n_features)
 
         rescale_factor=1
-        while True:
+        # while True:
           # Apply Rescaling to time
-          t_rescaled = tk/rescale_factor
+        t_rescaled = tk/rescale_factor
 
-          sigma = np.sqrt(2*deltak*t_rescaled)
+        sigma = np.sqrt(2*deltak*t_rescaled)
 
-          # Compute Function Values
-          tau = tau_xk - self.z_line*sigma # Size (int_samples,1)
+        # Compute Function Values
+        tau = tau_xk - self.z_line*sigma # Size (int_samples,1)
 
-          # Convert into f form
-          y = xk_expanded + tau.view(-1, 1) * direction_expanded
-          f_values = self.f(y) # Size (int_samples,1)
+        # Convert into f form
+        y = xk_expanded + tau.view(-1, 1) * direction_expanded
+        f_values = self.f(y) # Size (int_samples,1)
 
-          # Apply Rescaling to Exponent
-          rescaled_exponent = - rescale_factor*f_values/ deltak 
+        # Apply Rescaling to Exponent
+        rescaled_exponent = - rescale_factor*f_values/ deltak 
 
-          # Remove Max Exponent to prevent Overflow
-          shifted_exponent = rescaled_exponent - torch.max(rescaled_exponent)
+        # Remove Max Exponent to prevent Overflow
+        shifted_exponent = rescaled_exponent - torch.max(rescaled_exponent)
 
-          # Compute Exponential Term
-          exp_term = torch.exp(shifted_exponent).squeeze().double()
+        # Compute Exponential Term
+        exp_term = torch.exp(shifted_exponent).squeeze().double()
 
-          # Compute the Denominator Integral
-          # Compute weights_line
-          denominator = torch.dot(self.weights_line, exp_term)  # Scalar
-          w = torch.where(
-            denominator != 0,
-            self.weights_line * exp_term / denominator,
-            np.inf,#torch.full_like(self.weights, float("inf")),
-          )
+        # Compute the Denominator Integral
+        # Compute weights_line
+        denominator = torch.dot(self.weights_line, exp_term)  # Scalar
+        w = torch.where(
+        denominator != 0,
+        self.weights_line * exp_term / denominator,
+        np.inf,#torch.full_like(self.weights, float("inf")),
+        )
 
-          # Check for Overflow
-          softmax_overflow = 1.0 - (w < np.inf).prod()
-          if softmax_overflow and rescale_factor > 1e-20:
-              rescale_factor /= 2
-          else:
-              break
+        #   # Check for Overflow
+        #   softmax_overflow = 1.0 - (w < np.inf).prod()
+        #   if softmax_overflow and rescale_factor > 1e-20:
+        #       rescale_factor /= 2
+        #   else:
+        #       break
         
         # Compute Prox on Line
         grad_uk_L = (sigma/t_rescaled)*np.dot(w, self.z_line)
@@ -172,50 +176,57 @@ class HJ_MD_LS:
         xk = xk.squeeze(0)  # Remove unnecessary dimensions
         xk_expanded = xk.expand(self.int_samples, self.n_features) 
 
-        while True:
-            # Apply Rescaling to time
-            t_rescaled = tk/rescale_factor
+        # while True:
+        #     # Apply Rescaling to time
+        #     t_rescaled = tk/rescale_factor
 
-            standard_deviation = np.sqrt(deltak*t_rescaled)
+        # Compute Perturbed Points
+        if self.distribution == "Cauchy" and tk > 0:
+            scale = np.sqrt(2*deltak*tk)
+            cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=scale)
 
-            # Compute Perturbed Points
-            if self.distribution == "Cauchy":
-                cauchy_dist = torch.distributions.Cauchy(loc=xk, scale=t_rescaled)
-
-                # Sample `self.int_samples` points, result shape: (self.int_samples, n_features)
-                y = cauchy_dist.sample((self.int_samples,))
-            else:
-                y = xk_expanded + standard_deviation*torch.randn(self.int_samples, self.n_features)
-
-            # Compute Function Values
+            y = cauchy_dist.sample((self.int_samples,))
             f_values = self.f(y)  
-            rescaled_exponent = -rescale_factor * f_values / deltak - torch.norm(xk_expanded - y, p=2, dim=1)**2 / (2 * deltak * t_rescaled)
-            rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
-            exp_term = torch.exp(rescaled_exponent)
 
-            # Compute weights_line
-            denominator = torch.sum(exp_term)  # Scalar
-            w = torch.where(
-                denominator != 0,
-                exp_term / denominator,
-                np.inf,#torch.full_like(self.weights, float("inf")),
-            )
+            two_norm_squared = torch.sum((y - xk_expanded)**2, dim=1)
+            rescaled_exponent = -(1/deltak)*(f_values + (1/2*tk)*two_norm_squared - deltak*torch.log(two_norm_squared/(scale**2)+1))
+        else:
+            # if deltak*tk < 5e-3:
+            #     standard_deviation = np.sqrt(1e-6)
+            # else:
+            standard_deviation = np.sqrt(deltak*tk)
+            y = xk_expanded + standard_deviation*torch.randn(self.int_samples, self.n_features)
 
-            # Check for Overflow
-            softmax_overflow = 1.0 - (w < np.inf).prod()
+            f_values = self.f(y)  
+            rescaled_exponent = -rescale_factor * f_values / deltak
 
-            if softmax_overflow and rescale_factor > 1e-200:
-                # Adjust rescale factor and increment iteration count
-                rescale_factor /= 2
-                iterations += 1
-            else:
-                break
+        # Compute Function Values
+        rescaled_exponent = rescaled_exponent - torch.max(rescaled_exponent)
+        exp_term = torch.exp(rescaled_exponent)
+
+        # Compute weights_line
+        denominator = torch.sum(exp_term)  # Scalar
+        w = torch.where(
+            denominator != 0,
+            exp_term / denominator,
+            np.inf,#torch.full_like(self.weights, float("inf")),
+        )
+
+            # # Check for Overflow
+            # softmax_overflow = 1.0 - (w < np.inf).prod()
+
+            # if softmax_overflow and rescale_factor > 1e-200:
+            #     # Adjust rescale factor and increment iteration count
+            #     rescale_factor /= 2
+            #     iterations += 1
+            # else:
+            #     break
 
         prox_xk = torch.matmul(w.t(), y)
 
         # Update delta if the proximal point is worse than the current point
-        if self.verbose:
-            print(f"    Number of non-zero softmax weights on samples: {w[w>0.0].shape[0]}")
+        #if self.verbose:
+        #    print(f"    Number of non-zero softmax weights on samples: {w[w>0.0].shape[0]}")
 
         # Return the proximal point for xk
         return prox_xk
@@ -363,3 +374,138 @@ class HJ_MD_LS:
     
         return xk, fk,xk_hist[:,0:k+1], fk_hist[0:k+1], deltak_hist[0:k+1],tk_hist[0:k+1], k+1
 
+    def HJ_simulated_annealing(self, f, x0):
+        self.f = f
+        xk = x0.clone()
+        delta0 = self.delta
+        xk_minus_1 = x0.clone()
+        cooling_rate = self.cooling
+
+        # Initialize History
+        self.n_features = x0.shape[1]
+        fk_hist = torch.zeros(self.max_iters+1)
+        xk_hist = torch.zeros(self.n_features,self.max_iters+1)
+        deltak_hist = torch.zeros(self.max_iters+1)
+        p_hist = torch.zeros(self.max_iters+1)
+        fk = self.f(xk.view(1, self.n_features))
+        xk_hist[:,0] = xk
+        fk_hist[0] = fk 
+        deltak_hist[0] = delta0
+        p_hist[0] = 0
+        p=0
+
+        # Define Outputs
+        fmt = '[{:3d}]: Energy fk = {:6.2e} | Temperature deltak = {:6.2e} | Time tk = {:6.2e} | Brownian Variance = {:6.2e}'
+        if self.verbose:
+            print('-------------------------- RUNNING HJ-MAD-LS Algorithm ---------------------------')
+            print('dimension = ', self.n_features, 'n_samples = ', self.int_samples)
+            # print(fmt.format(0, fk_hist[0], delta0, 0, 0))
+
+        saturation_count = 0
+        restarts =0
+        fk_opt = fk
+        xk_opt = xk
+        tk =1
+        while True:
+            # accepted_moves =0
+            while True:
+                if tk >= self.max_iters-1:
+                    break
+                # Apply Cooling Schedule
+                #deltak = self.cooling*deltak # Geometric Cooling
+                deltak = delta0/(1+self.cooling*(tk**3))
+                #deltak = delta0/np.log(tk+np.e) # Classic Cooling
+
+                # Approximate Brownian / Boltzmann Expectation
+                if self.distribution == "Cauchy":
+                    #scale = np.sqrt(2*deltak*tk)
+                    prox_xk = self.compute_prox(xk,deltak,tk)# torch.distributions.Cauchy(loc=xk, scale=scale).sample()
+                else: # Gaussian
+                    #standard_deviation = np.sqrt(deltak*tk)
+                    prox_xk = self.compute_prox(xk,deltak,tk)#prox_xk = xk + standard_deviation*torch.randn(1, self.n_features)
+
+                if self.line_search and tk > 0:
+                    prox_xk = self.improve_prox_with_line_search(xk,prox_xk,deltak,tk)
+
+                delta_f = self.f(prox_xk.view(1, self.n_features)) - fk
+
+                # # Apply Metropolis-Hastings Correction
+                p = torch.exp(-delta_f / deltak)
+                if delta_f < 0 or p > np.random.rand():
+                    # accepted_moves += 1
+                    xk = prox_xk
+                    fk = self.f(xk.view(1, self.n_features))
+
+
+                # # Calculate acceptance rate
+                # acceptance_rate = accepted_moves / tk
+                
+                # # Adjust the temperature based on the acceptance rate
+                # if acceptance_rate < 0.2:
+                #     # Accelerate the cooling rate to focus on convergence
+                #     cooling_rate *= 1.1
+
+                # Apply Accelerated Gradient Descent
+                yk = xk + self.momentum * (xk - xk_minus_1)
+                xk_minus_1 = xk
+
+                # Update first moments (Weight Sum Moving Average) (first_moment = (yk-prox_xk) if beta = 0)
+                if tk == 1:
+                    first_moment = prox_xk
+
+                first_moment = self.beta*first_moment+(1-self.beta)*(yk-prox_xk)
+
+                # Apply Moreau Envelope Descent
+                xk = yk - self.stepsize*first_moment
+                fk = self.f(xk.view(1, self.n_features))
+
+                if fk <fk_opt:
+                    fk_opt = fk
+                    xk_opt = xk
+
+                # Print Iteration Information
+                if tk % 100 == 1:
+                    if self.verbose:
+                        print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+                # Update History
+                xk_hist[:,tk+1] = xk
+                fk_hist[tk+1] = fk
+                deltak_hist[tk+1] = deltak
+                p_hist[tk+1] = p
+
+                # Stopping Criteria
+                if fk < self.f_tol: # f value is less than tolerance
+                    if self.verbose:
+                        print(f'    HJ-MAD converged to tolerence {self.f_tol:6.2e}')
+                        print(f'    iter = {tk}: f_value =  {fk}')
+                    break
+
+                # Check for Relative Saturation
+                relative_saturation = abs(delta_f) / abs(fk) # Avoid division by zero
+                if relative_saturation < 1e-3:
+                    saturation_count += 1
+                else:
+                    saturation_count = 0  # Reset if progress resumes
+
+                # Trigger Restart if Saturation Detected
+                if saturation_count >= 10:
+                    if self.verbose:
+                        print(f"Restart triggered at iteration {tk} due to relative saturation.")
+                    delta0 = delta0*1.1
+                    cooling_rate *= 0.9
+                    #xk = xk_opt + torch.randn_like(xk) * 0.01  # Perturb xk slightly
+                    fk = self.f(xk.view(1, self.n_features))  # Recompute objective value
+                    print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+                    saturation_count = 0  # Reset saturation count
+                    restarts += 1
+                    break  # Skip further updates in the current iteration
+                tk += 1
+
+            if tk >= self.max_iters-1:
+                if self.verbose:
+                    print(f"    HJ-MAD did not converge after {tk} iterations")
+                break  
+            if fk < self.f_tol: 
+                break  
+        
+        return xk_opt, fk_opt,xk_hist[:,2:tk+1], fk_hist[2:tk+1], deltak_hist[2:tk+1],p_hist[2:tk+1], tk+1

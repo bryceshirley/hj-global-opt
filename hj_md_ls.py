@@ -158,7 +158,8 @@ class HJ_MAD_LS:
         beta: float = 0.0,
         momentum: float = 0.0,
         verbose: bool = True,
-        eps0: float = 0.1
+        eps0: float = 0.1,
+        cooling: float = 0.1
     ) -> None:
       
         # General configurations
@@ -176,6 +177,7 @@ class HJ_MAD_LS:
         self.momentum = momentum
         self.n_features = x_true.shape[0]
         self.eps0 = eps0
+        self.cooling = cooling
 
         # Adaptive delta configurations
         self.adaptive_delta = adaptive_delta_config is not None
@@ -718,4 +720,136 @@ class HJ_MAD_LS:
                 print(f"    HJ-MAD did not converge after {self.max_iters} iterations")
     
         return xk, xk_hist[:k+2,:], xk_error_hist[:k+2], fk_hist[:k+2], deltak_hist[:k+2], tk_hist[:k+2], successful_ls_portion/(k+2)
+    
+    def HJ_simulated_annealing(self, x0):
+        # self.f = f
+        xk = x0.clone()
+        delta0 = self.delta
+        xk_minus_1 = x0.clone()
+        cooling_rate = self.cooling
 
+        # Initialize History
+        self.n_features = x0.shape[0]
+        fk_hist = torch.zeros(self.max_iters+1)
+        xk_hist = torch.zeros(self.n_features,self.max_iters+1)
+        deltak_hist = torch.zeros(self.max_iters+1)
+        p_hist = torch.zeros(self.max_iters+1)
+        fk = self.f(xk.view(1, self.n_features))
+        xk_hist[:,0] = xk
+        fk_hist[0] = fk 
+        deltak_hist[0] = delta0
+        p_hist[0] = 0
+        p=0
+
+        # Define Outputs
+        fmt = '[{:3d}]: Energy fk = {:6.2e} | Temperature deltak = {:6.2e} | Time tk = {:6.2e} | Brownian Variance = {:6.2e}'
+        if self.verbose:
+            print('-------------------------- RUNNING HJ-MAD-LS Algorithm ---------------------------')
+            print('dimension = ', self.n_features, 'n_samples = ', self.int_samples)
+            # print(fmt.format(0, fk_hist[0], delta0, 0, 0))
+
+        saturation_count = 0
+        restarts =0
+        fk_opt = fk
+        xk_opt = xk
+        tk =1
+        while True:
+            # accepted_moves =0
+            while True:
+                if tk >= self.max_iters-1:
+                    break
+                # Apply Cooling Schedule
+                #deltak = self.cooling*deltak # Geometric Cooling
+                deltak = delta0/(1+cooling_rate*((tk**3)))
+                #deltak = delta0/np.log(tk+np.e) # Classic Cooling
+
+                # Approximate Brownian / Boltzmann Expectation
+                prox_xk = self.compute_directional_prox(xk,deltak,tk)# torch.distributions.Cauchy(loc=xk, scale=scale).sample()
+
+                if self.line_search and tk > 0:
+                    prox_xk = self.improve_prox_with_line_search(xk, prox_xk,deltak,tk)
+
+                delta_f = self.f(prox_xk.view(1, self.n_features)) - fk
+
+                # # Apply Metropolis-Hastings Correction
+                p = torch.exp(-delta_f / deltak)
+                if delta_f < 0 or p > np.random.rand():
+                    # accepted_moves += 1
+                    xk = prox_xk
+                    fk = self.f(xk.view(1, self.n_features))
+
+
+                # # Calculate acceptance rate
+                # acceptance_rate = accepted_moves / tk
+                
+                # # Adjust the temperature based on the acceptance rate
+                # if acceptance_rate < 0.2:
+                #     # Accelerate the cooling rate to focus on convergence
+                #     cooling_rate *= 1.1
+
+                # Apply Accelerated Gradient Descent
+                yk = xk + self.momentum * (xk - xk_minus_1)
+                xk_minus_1 = xk
+
+                # Update first moments (Weight Sum Moving Average) (first_moment = (yk-prox_xk) if beta = 0)
+                if tk == 1:
+                    first_moment = prox_xk
+
+                first_moment = self.beta*first_moment+(1-self.beta)*(yk-prox_xk)
+
+                # Apply Moreau Envelope Descent
+                xk = yk - self.step_size*first_moment
+                fk = self.f(xk.view(1, self.n_features))
+
+                if fk <fk_opt:
+                    fk_opt = fk
+                    xk_opt = xk
+
+                # Print Iteration Information
+                if tk % 10 == 1:
+                    if self.verbose:
+                        print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+                # Update History
+                xk_hist[:,tk+1] = xk
+                fk_hist[tk+1] = fk
+                deltak_hist[tk+1] = deltak
+                p_hist[tk+1] = p
+
+                # Stopping Criteria
+                if fk < self.tol: # f value is less than tolerance
+                    if self.verbose:
+                        print(f'    HJ-MAD converged to tolerence {self.tol:6.2e}')
+                        print(f'    iter = {tk}: f_value =  {fk}')
+                    break
+
+                # Check for Relative Saturation
+                relative_saturation = abs(delta_f) / abs(fk) # Avoid division by zero
+                if relative_saturation < 1e-3:
+                    saturation_count += 1
+                else:
+                    saturation_count = 0  # Reset if progress resumes
+
+                # Trigger Restart if Saturation Detected
+                if saturation_count >= 10:
+                    if self.verbose:
+                        print(f"Restart triggered at iteration {tk} due to relative saturation.")
+                    delta0 = delta0*1.1
+                    cooling_rate *= 0.9
+                    #xk = xk_opt + torch.randn_like(xk) * 0.01  # Perturb xk slightly
+                    fk = self.f(xk.view(1, self.n_features))  # Recompute objective value
+                    print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+                    saturation_count = 0  # Reset saturation count
+                    restarts += 1
+                    break  # Skip further updates in the current iteration
+                tk += 1
+
+            if tk >= self.max_iters-1:
+                if self.verbose:
+                    print(f"    HJ-MAD did not converge after {tk} iterations")
+                break  
+            if fk < self.tol: 
+                break  
+        
+        return xk_opt, xk_hist[:,2:tk+1], fk_hist[2:tk+1], deltak_hist[2:tk+1],p_hist[2:tk+1]
+
+#x_opt_cauchy, xk_hist_cauchy, fk_hist_cauchy, delta_hist_cauchy, tk_hist_cauchy

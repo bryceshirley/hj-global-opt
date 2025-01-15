@@ -49,7 +49,7 @@ class HJ_MD_LS:
     '''
     def __init__(self, delta=100, t = 1e1, int_samples=1000, max_iters=1e4, f_tol = 1e-5,
                  distribution="Gaussian",beta=0.0, momentum=0.0,verbose=True,
-                 line_search=True, stepsize=1.0, cooling=0.99,
+                 line_search=True, stepsize=1.0, cooling_rate=2,
                  adaptive_delta=True, adaptive_delta_params=[1e-2,0.9,1.1],#0.9 before
                  adaptive_time=False, adaptive_time_params=[5e-5,1e5,1.1,0.99,1.01], dof=2.0):
         
@@ -96,7 +96,7 @@ class HJ_MD_LS:
         self.momentum = momentum
 
         self.dof = dof
-        self.cooling = cooling
+        self.cooling_rate = cooling_rate
 
         # Output Parameters
         self.verbose          = verbose
@@ -379,20 +379,22 @@ class HJ_MD_LS:
         xk = x0.clone()
         delta0 = self.delta
         xk_minus_1 = x0.clone()
-        cooling_rate = self.cooling
+        p = self.cooling_rate
+        B = ((p-1)**(p-1))/(p**p)
+        #B=1
 
         # Initialize History
         self.n_features = x0.shape[1]
         fk_hist = torch.zeros(self.max_iters+1)
         xk_hist = torch.zeros(self.n_features,self.max_iters+1)
         deltak_hist = torch.zeros(self.max_iters+1)
-        p_hist = torch.zeros(self.max_iters+1)
+        pr_hist = torch.zeros(self.max_iters+1)
         fk = self.f(xk.view(1, self.n_features))
         xk_hist[:,0] = xk
         fk_hist[0] = fk 
         deltak_hist[0] = delta0
-        p_hist[0] = 0
-        p=0
+        pr_hist[0] = 0
+        pr=0
 
         # Define Outputs
         fmt = '[{:3d}]: Energy fk = {:6.2e} | Temperature deltak = {:6.2e} | Time tk = {:6.2e} | Brownian Variance = {:6.2e}'
@@ -405,107 +407,108 @@ class HJ_MD_LS:
         restarts =0
         fk_opt = fk
         xk_opt = xk
-        tk =1
+        tk =0
+        total_iterations = 0
         while True:
-            # accepted_moves =0
-            while True:
-                if tk >= self.max_iters-1:
-                    break
-                # Apply Cooling Schedule
-                #deltak = self.cooling*deltak # Geometric Cooling
-                deltak = delta0/(1+self.cooling*(tk**3))
-                #deltak = delta0/np.log(tk+np.e) # Classic Cooling
+            # Apply Cooling Schedule
+            #deltak = self.cooling*deltak # Geometric Cooling
+            deltak = delta0/(1+B*(tk**p))
+            #deltak = delta0/np.log(tk+np.e) # Classic Cooling
 
-                # Approximate Brownian / Boltzmann Expectation
-                if self.distribution == "Cauchy":
-                    #scale = np.sqrt(2*deltak*tk)
-                    prox_xk = self.compute_prox(xk,deltak,tk)# torch.distributions.Cauchy(loc=xk, scale=scale).sample()
-                else: # Gaussian
-                    #standard_deviation = np.sqrt(deltak*tk)
-                    prox_xk = self.compute_prox(xk,deltak,tk)#prox_xk = xk + standard_deviation*torch.randn(1, self.n_features)
+            # Approximate Brownian / Boltzmann Expectation
+            prox_xk = self.compute_prox(xk,deltak,tk)# torch.distributions.Cauchy(loc=xk, scale=scale).sample()
 
-                if self.line_search and tk > 0:
-                    prox_xk = self.improve_prox_with_line_search(xk,prox_xk,deltak,tk)
+            if self.line_search and tk > 0:
+                prox_xk = self.improve_prox_with_line_search(xk,prox_xk,deltak,tk)
 
-                delta_f = self.f(prox_xk.view(1, self.n_features)) - fk
+            delta_f = self.f(prox_xk.view(1, self.n_features)) - fk
 
-                # # Apply Metropolis-Hastings Correction
-                p = torch.exp(-delta_f / deltak)
-                if delta_f < 0 or p > np.random.rand():
-                    # accepted_moves += 1
-                    xk = prox_xk
-                    fk = self.f(xk.view(1, self.n_features))
-
-
-                # # Calculate acceptance rate
-                # acceptance_rate = accepted_moves / tk
-                
-                # # Adjust the temperature based on the acceptance rate
-                # if acceptance_rate < 0.2:
-                #     # Accelerate the cooling rate to focus on convergence
-                #     cooling_rate *= 1.1
-
-                # Apply Accelerated Gradient Descent
-                yk = xk + self.momentum * (xk - xk_minus_1)
-                xk_minus_1 = xk
-
-                # Update first moments (Weight Sum Moving Average) (first_moment = (yk-prox_xk) if beta = 0)
-                if tk == 1:
-                    first_moment = prox_xk
-
-                first_moment = self.beta*first_moment+(1-self.beta)*(yk-prox_xk)
-
-                # Apply Moreau Envelope Descent
-                xk = yk - self.stepsize*first_moment
+            # # Apply Metropolis-Hastings Correction
+            pr = torch.exp(-delta_f / deltak)
+            if delta_f < 0 or pr > np.random.rand():
+                # accepted_moves += 1
+                xk = prox_xk
                 fk = self.f(xk.view(1, self.n_features))
 
-                if fk <fk_opt:
-                    fk_opt = fk
-                    xk_opt = xk
 
-                # Print Iteration Information
-                if tk % 100 == 1:
-                    if self.verbose:
-                        print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
-                # Update History
-                xk_hist[:,tk+1] = xk
-                fk_hist[tk+1] = fk
-                deltak_hist[tk+1] = deltak
-                p_hist[tk+1] = p
+            # # Calculate acceptance rate
+            # acceptance_rate = accepted_moves / tk
+            
+            # # Adjust the temperature based on the acceptance rate
+            # if acceptance_rate < 0.2:
+            #     # Accelerate the cooling rate to focus on convergence
+            #     cooling_rate *= 1.1
 
-                # Stopping Criteria
-                if fk < self.f_tol: # f value is less than tolerance
-                    if self.verbose:
-                        print(f'    HJ-MAD converged to tolerence {self.f_tol:6.2e}')
-                        print(f'    iter = {tk}: f_value =  {fk}')
-                    break
+            # Apply Accelerated Gradient Descent
+            yk = xk + self.momentum * (xk - xk_minus_1)
+            xk_minus_1 = xk
 
-                # Check for Relative Saturation
-                relative_saturation = abs(delta_f) / abs(fk) # Avoid division by zero
-                if relative_saturation < 1e-3:
-                    saturation_count += 1
-                else:
-                    saturation_count = 0  # Reset if progress resumes
+            # Update first moments (Weight Sum Moving Average) (first_moment = (yk-prox_xk) if beta = 0)
+            if tk == 0 and restarts == 0:
+                first_moment = prox_xk
 
-                # Trigger Restart if Saturation Detected
-                if saturation_count >= 10:
-                    if self.verbose:
-                        print(f"Restart triggered at iteration {tk} due to relative saturation.")
-                    delta0 = delta0*1.1
-                    cooling_rate *= 0.9
-                    #xk = xk_opt + torch.randn_like(xk) * 0.01  # Perturb xk slightly
-                    fk = self.f(xk.view(1, self.n_features))  # Recompute objective value
-                    print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
-                    saturation_count = 0  # Reset saturation count
-                    restarts += 1
-                    break  # Skip further updates in the current iteration
-                tk += 1
+            first_moment = self.beta*first_moment+(1-self.beta)*(yk-prox_xk)
 
-            if tk >= self.max_iters-1:
+            # Apply Moreau Envelope Descent
+            xk = yk - self.stepsize*first_moment
+            fk = self.f(xk.view(1, self.n_features))
+
+            if fk <fk_opt:
+                fk_opt = fk
+                xk_opt = xk
+
+            # Print Iteration Information
+            if tk % 100 == 0:
                 if self.verbose:
-                    print(f"    HJ-MAD did not converge after {tk} iterations")
+                    print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+            # Update History
+            xk_hist[:,tk+1] = xk
+            fk_hist[tk+1] = fk
+            deltak_hist[tk+1] = deltak
+            pr_hist[tk+1] = pr
+
+            # Stopping Criteria
+            if fk < self.f_tol: # f value is less than tolerance
+                if self.verbose:
+                    print(f'    HJ-MAD-Annealed at iteration {total_iterations}, converged to tolerence {self.f_tol:6.2e}.')
+                break
+
+            # Check for Relative Saturation
+            relative_saturation = abs(delta_f) / abs(fk) # Avoid division by zero
+            if relative_saturation < 1e-3:
+                saturation_count += 1
+            else:
+                saturation_count = 0  # Reset if progress resumes
+
+            # Increase time
+            tk += 1
+
+            # Trigger Restart if Saturation Detected
+            if saturation_count >= 100:
+                if self.verbose:
+                    print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+                    print(f"Restart triggered at iteration time {tk} due to relative saturation.")
+                
+                # Reduce total temperature
+                delta0 = min(delta0*0.9,1e-5)
+
+                # Reset time
+                tk = 0
+
+                #xk = xk_opt
+                fk = self.f(xk.view(1, self.n_features))  # Recompute objective value
+                #print(fmt.format(tk, fk.item(), deltak, tk,deltak*tk))
+                saturation_count = 0  # Reset saturation count
+                restarts += 1
+
+            
+            total_iterations += 1
+            if total_iterations >= self.max_iters-1:
+                if self.verbose:
+                    print(f"    HJ-MAD did not converge after {total_iterations} iterations")
                 break  
             if fk < self.f_tol: 
                 break  
-        
-        return xk_opt, fk_opt,xk_hist[:,2:tk+1], fk_hist[2:tk+1], deltak_hist[2:tk+1],p_hist[2:tk+1], tk+1
+
+        print(f"    HJ-MAD-Annealed used {restarts} restarts.")
+        return xk_opt, fk_opt,xk_hist[:,2:tk+1], fk_hist[2:tk+1], deltak_hist[2:tk+1],pr_hist[2:tk+1], tk+1
